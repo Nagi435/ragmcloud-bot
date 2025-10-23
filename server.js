@@ -31,8 +31,11 @@ app.use((req, res, next) => {
     next();
 });
 
+// Serve static files from public directory
+app.use(express.static(path.join(__dirname, 'public')));
+
 // Create required directories
-const directories = ['uploads', 'memory', 'tmp', 'reports', 'sessions'];
+const directories = ['uploads', 'memory', 'tmp', 'reports', 'sessions', 'public'];
 directories.forEach(dir => {
     if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
@@ -1173,18 +1176,44 @@ function initializeWhatsApp() {
             }
         });
 
-        // QR Code Generation
+        // QR Code Generation - FIXED FOR WEB DISPLAY
         whatsappClient.on('qr', (qr) => {
             console.log('📱 QR CODE RECEIVED');
             qrcode.generate(qr, { small: true });
             
-            // Generate QR code for web interface
-            QRCode.toDataURL(qr, (err, url) => {
-                if (!err) {
-                    qrCodeUrl = url;
-                    io.emit('qr', qrCodeUrl);
-                    io.emit('status', { connected: false, message: 'يرجى مسح QR Code' });
+            // Generate QR code for web interface - FIXED WITH ERROR HANDLING
+            QRCode.toDataURL(qr, { 
+                width: 300,
+                height: 300,
+                margin: 2,
+                color: {
+                    dark: '#000000',
+                    light: '#FFFFFF'
                 }
+            }, (err, url) => {
+                if (err) {
+                    console.error('❌ Error generating QR code for web:', err);
+                    // Fallback: create a simple data URL with error message
+                    qrCodeUrl = 'data:image/svg+xml;base64,' + Buffer.from(`
+                        <svg width="300" height="300" xmlns="http://www.w3.org/2000/svg">
+                            <rect width="100%" height="100%" fill="white"/>
+                            <text x="50%" y="50%" text-anchor="middle" dy=".3em" font-family="Arial" font-size="14" fill="red">
+                                QR Error - Check Console
+                            </text>
+                        </svg>
+                    `).toString('base64');
+                } else {
+                    qrCodeUrl = url;
+                    console.log('✅ QR code generated successfully for web');
+                }
+                
+                // Emit QR code to all connected clients
+                io.emit('qr', qrCodeUrl);
+                io.emit('status', { 
+                    connected: false, 
+                    message: 'يرجى مسح QR Code للاتصال',
+                    qrAvailable: true 
+                });
             });
         });
 
@@ -1192,7 +1221,13 @@ function initializeWhatsApp() {
         whatsappClient.on('ready', () => {
             console.log('✅ WhatsApp READY!');
             isConnected = true;
-            io.emit('status', { connected: true, message: 'واتساب متصل ✅' });
+            qrCodeUrl = ''; // Clear QR code when connected
+            io.emit('status', { 
+                connected: true, 
+                message: 'واتساب متصل ✅',
+                qrAvailable: false 
+            });
+            io.emit('qr', ''); // Clear QR code from frontend
         });
 
         // FIXED: Message Event with IMMEDIATE Auto-Reply
@@ -1235,14 +1270,22 @@ function initializeWhatsApp() {
         whatsappClient.on('auth_failure', (msg) => {
             console.log('❌ WhatsApp auth failed:', msg);
             isConnected = false;
-            io.emit('status', { connected: false, message: 'فشل المصادقة' });
+            io.emit('status', { 
+                connected: false, 
+                message: 'فشل المصادقة - جاري إعادة المحاولة...',
+                qrAvailable: false 
+            });
         });
 
         // Disconnected Event
         whatsappClient.on('disconnected', (reason) => {
             console.log('🔌 WhatsApp disconnected:', reason);
             isConnected = false;
-            io.emit('status', { connected: false, message: 'جارٍ إعادة الاتصال...' });
+            io.emit('status', { 
+                connected: false, 
+                message: 'جارٍ إعادة الاتصال...',
+                qrAvailable: false 
+            });
             
             // Auto-reconnect after 5 seconds
             setTimeout(() => {
@@ -1356,6 +1399,15 @@ app.use(express.static('public'));
 // Routes
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// NEW: QR Code status endpoint
+app.get('/api/qr-status', (req, res) => {
+    res.json({
+        connected: isConnected,
+        qrAvailable: !!qrCodeUrl && !isConnected,
+        qrCode: qrCodeUrl
+    });
 });
 
 // Upload Excel file
@@ -1672,16 +1724,20 @@ app.post('/api/reconnect-whatsapp', (req, res) => {
 io.on('connection', (socket) => {
     console.log('Client connected');
     
+    // Send current status
     socket.emit('status', { 
         connected: isConnected, 
-        message: isConnected ? 'واتساب متصل ✅' : 'جارٍ الاتصال...' 
+        message: isConnected ? 'واتساب متصل ✅' : 'جارٍ الاتصال...',
+        qrAvailable: !!qrCodeUrl && !isConnected
     });
 
     // Send bot status
     socket.emit('bot_status', { stopped: isBotStopped });
 
-    if (qrCodeUrl) {
+    // Send QR code if available
+    if (qrCodeUrl && !isConnected) {
         socket.emit('qr', qrCodeUrl);
+        console.log('📱 Sent QR code to new client');
     }
 
     // Handle bot toggle
@@ -1751,6 +1807,14 @@ io.on('connection', (socket) => {
         manualReconnectWhatsApp();
     });
 
+    socket.on('get_qr_status', () => {
+        socket.emit('qr_status', {
+            connected: isConnected,
+            qrAvailable: !!qrCodeUrl && !isConnected,
+            qrCode: qrCodeUrl
+        });
+    });
+
     socket.on('disconnect', () => {
         console.log('Client disconnected');
     });
@@ -1775,4 +1839,5 @@ server.listen(PORT, () => {
     console.log('📊 AUTO-REPORT AFTER 30 MESSAGES: ENABLED');
     console.log('💰 CORRECT PACKAGES: 1000, 1800, 2700, 3000 ريال');
     console.log('🔄 CRITICAL FIX: AUTO-REPLY NOW WORKS FOR ALL CLIENTS');
+    console.log('📱 QR CODE: WILL APPEAR ON WEB INTERFACE WHEN NEEDED');
 });
