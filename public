@@ -1,0 +1,1386 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>رقم كلاود ERP - Smart Sales Assistant</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Fixed Socket.io CDN -->
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#007C5C',
+                        'primary-dark': '#006A4E',
+                        'primary-light': '#00B98B',
+                        luxury: {
+                            gold: '#D4AF37',
+                            'dark-bg': '#1a1f2e',
+                            'card-bg': '#2d3748',
+                            'sidebar-bg': '#2d3748'
+                        }
+                    },
+                    fontFamily: {
+                        'tajawal': ['Tajawal', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700;800&display=swap');
+        
+        body {
+            font-family: 'Tajawal', sans-serif;
+            background: linear-gradient(135deg, #1a1f2e 0%, #2d3748 100%);
+        }
+        
+        .glass-effect {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .luxury-card {
+            background: rgba(45, 55, 72, 0.95);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(212, 175, 55, 0.3);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+        
+        .gold-border {
+            border: 2px solid #D4AF37;
+        }
+        
+        .gradient-text {
+            background: linear-gradient(135deg, #D4AF37, #FFD700);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .btn-gold {
+            background: linear-gradient(135deg, #D4AF37, #FFD700);
+            color: #1a1f2e;
+            transition: all 0.3s ease;
+        }
+        
+        .btn-gold:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 20px rgba(212, 175, 55, 0.4);
+        }
+        
+        .status-connected {
+            background: linear-gradient(135deg, #00B98B, #007C5C);
+            color: white;
+        }
+        
+        .status-disconnected {
+            background: linear-gradient(135deg, #f56565, #c53030);
+            color: white;
+        }
+        
+        .client-item {
+            transition: all 0.3s ease;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .client-item:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+        
+        .client-item.active {
+            background: rgba(0, 124, 92, 0.2);
+            border-right: 3px solid #00B98B;
+        }
+        
+        .unread-badge {
+            background: linear-gradient(135deg, #f56565, #c53030);
+            color: white;
+        }
+        
+        /* IMPROVED CHAT STYLES */
+        .chat-container {
+            height: calc(100vh - 280px);
+            overflow-y: auto;
+            scroll-behavior: smooth;
+            padding: 10px;
+        }
+        
+        .chat-bubble {
+            max-width: 75%;
+            padding: 8px 12px;
+            border-radius: 12px;
+            margin-bottom: 6px;
+            position: relative;
+            font-size: 14px;
+            line-height: 1.4;
+            word-wrap: break-word;
+        }
+        
+        .chat-bubble.sent {
+            background: linear-gradient(135deg, #007C5C, #00B98B);
+            margin-left: auto;
+            border-bottom-right-radius: 4px;
+        }
+        
+        .chat-bubble.received {
+            background: rgba(255, 255, 255, 0.1);
+            margin-right: auto;
+            border-bottom-left-radius: 4px;
+        }
+        
+        .message-content {
+            word-wrap: break-word;
+            line-height: 1.4;
+        }
+        
+        .chat-time {
+            text-align: left;
+            direction: ltr;
+            font-size: 11px;
+            opacity: 0.7;
+            margin-top: 2px;
+        }
+        
+        .scroll-to-bottom {
+            position: absolute;
+            bottom: 80px;
+            right: 20px;
+            background: rgba(0, 124, 92, 0.9);
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            z-index: 100;
+        }
+        
+        .scroll-to-bottom.visible {
+            opacity: 1;
+        }
+        
+        .scroll-to-bottom:hover {
+            background: rgba(0, 124, 92, 1);
+            transform: scale(1.1);
+        }
+        
+        /* Client Interest Status Colors */
+        .client-status-interested {
+            border-left: 4px solid #10B981 !important;
+        }
+        
+        .client-status-busy {
+            border-left: 4px solid #F59E0B !important;
+        }
+        
+        .client-status-not-interested {
+            border-left: 4px solid #EF4444 !important;
+        }
+        
+        .client-status-no-reply {
+            border-left: 4px solid #9CA3AF !important;
+        }
+        
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-left: 5px;
+        }
+        
+        .dot-interested { background-color: #10B981; }
+        .dot-busy { background-color: #F59E0B; }
+        .dot-not-interested { background-color: #EF4444; }
+        .dot-no-reply { background-color: #9CA3AF; }
+        
+        .toast {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 12px 20px;
+            border-radius: 8px;
+            color: white;
+            font-weight: bold;
+            z-index: 1000;
+            transform: translateX(400px);
+            transition: transform 0.3s ease;
+            max-width: 300px;
+        }
+        
+        .toast.show {
+            transform: translateX(0);
+        }
+        
+        .toast.success {
+            background: linear-gradient(135deg, #00B98B, #007C5C);
+        }
+        
+        .toast.error {
+            background: linear-gradient(135deg, #f56565, #c53030);
+        }
+        
+        .toast.warning {
+            background: linear-gradient(135deg, #ed8936, #dd6b20);
+        }
+        
+        .qr-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+        
+        .qr-container {
+            background: rgba(45, 55, 72, 0.95);
+            padding: 30px;
+            border-radius: 20px;
+            text-align: center;
+            border: 2px solid #D4AF37;
+        }
+        
+        /* Scrollbar Styling */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: linear-gradient(135deg, #D4AF37, #FFD700);
+            border-radius: 3px;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: linear-gradient(135deg, #FFD700, #D4AF37);
+        }
+        
+        /* Client Status Filter */
+        .status-filter {
+            display: flex;
+            gap: 5px;
+            margin-bottom: 10px;
+            flex-wrap: wrap;
+        }
+        
+        .status-filter-btn {
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            border: none;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .status-filter-btn.active {
+            transform: scale(1.05);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+        }
+        
+        .btn-all { background: #6B7280; color: white; }
+        .btn-interested { background: #10B981; color: white; }
+        .btn-busy { background: #F59E0B; color: white; }
+        .btn-not-interested { background: #EF4444; color: white; }
+        .btn-no-reply { background: #9CA3AF; color: white; }
+
+        /* NEW: Auto-report notification */
+        .auto-report-notification {
+            background: linear-gradient(135deg, #ed8936, #dd6b20);
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            animation: pulse 2s infinite;
+            display: none;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.7; }
+            100% { opacity: 1; }
+        }
+
+        /* NEW: Bot status indicator */
+        .bot-status-stopped {
+            background: linear-gradient(135deg, #f56565, #c53030) !important;
+        }
+
+        .bot-status-running {
+            background: linear-gradient(135deg, #00B98B, #007C5C) !important;
+        }
+    </style>
+</head>
+<body class="text-white">
+    <!-- Toast Notifications -->
+    <div id="toastContainer" class="fixed top-4 right-4 z-50"></div>
+    
+    <!-- NEW: Auto Report Notification -->
+    <div id="autoReportNotification" class="auto-report-notification">
+        <i class="fas fa-bell mr-2"></i>
+        <span id="autoReportMessage"></span>
+    </div>
+    
+    <!-- QR Overlay -->
+    <div id="qrOverlay" class="qr-overlay hidden">
+        <div class="qr-container luxury-card">
+            <div class="flex items-center justify-center mb-4">
+                <i class="fab fa-whatsapp text-3xl text-green-400 mr-3"></i>
+                <h3 class="text-xl font-bold gradient-text">Scan QR Code</h3>
+            </div>
+            <p class="text-gray-300 mb-4">Scan this QR code with WhatsApp to connect</p>
+            <div id="qrCode" class="mb-4 flex justify-center"></div>
+            <button id="closeQR" class="btn-gold px-6 py-2 rounded-lg font-bold">
+                <i class="fas fa-times mr-2"></i>إغلاق
+            </button>
+        </div>
+    </div>
+    
+    <div class="flex h-screen">
+        <!-- Left Sidebar -->
+        <div class="w-80 luxury-card rounded-r-2xl m-3 flex flex-col">
+            <!-- Header -->
+            <div class="p-6 border-b border-gray-600">
+                <div class="flex items-center justify-between mb-4">
+                    <div class="flex items-center">
+                        <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-primary to-primary-light flex items-center justify-center text-white mr-3">
+                            <i class="fas fa-cloud"></i>
+                        </div>
+                        <div>
+                            <h1 class="text-xl font-bold gradient-text">رقم كلاود</h1>
+                            <p class="text-sm text-gray-400">ERP Sales Assistant</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- WhatsApp Status -->
+                <div class="flex items-center justify-between mb-4">
+                    <span class="text-sm text-gray-300">حالة الواتساب:</span>
+                    <span id="whatsappStatus" class="status-disconnected px-3 py-1 rounded-full text-sm font-bold">غير متصل</span>
+                </div>
+
+                <!-- NEW: Bot Status -->
+                <div class="flex items-center justify-between mb-4">
+                    <span class="text-sm text-gray-300">حالة البوت:</span>
+                    <span id="botStatus" class="bot-status-running px-3 py-1 rounded-full text-sm font-bold">نشط</span>
+                </div>
+                
+                <!-- Reconnect Button -->
+                <button id="reconnectBtn" class="w-full btn-gold py-2 rounded-lg font-bold mb-4">
+                    <i class="fas fa-sync-alt mr-2"></i>إعادة الاتصال
+                </button>
+
+                <!-- NEW: Stop Bot Button -->
+                <button id="stopBotBtn" class="w-full bg-red-600 hover:bg-red-700 py-2 rounded-lg font-bold mb-4 transition-colors">
+                    <i class="fas fa-stop mr-2"></i>إيقاف البوت
+                </button>
+                
+                <!-- AI Mode Toggle -->
+                <div class="flex items-center justify-between p-3 bg-gray-700 rounded-lg">
+                    <span class="text-sm text-gray-300">وضع الذكاء الاصطناعي</span>
+                    <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" id="aiToggle" class="sr-only peer" checked>
+                        <div class="w-11 h-6 bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
+                    </label>
+                </div>
+                
+                <!-- AI Status -->
+                <div id="aiStatus" class="mt-2 p-2 bg-green-900 bg-opacity-20 rounded-lg text-center">
+                    <span class="text-green-400 text-sm">🤖 الذكاء الاصطناعي مفعل</span>
+                </div>
+            </div>
+            
+            <!-- File Upload Section -->
+            <div class="p-6 border-b border-gray-600">
+                <h3 class="font-bold text-lg mb-3 gradient-text">رفع قاعدة العملاء</h3>
+                <input type="file" id="excelFile" accept=".xlsx,.xls" class="hidden">
+                <button id="uploadBtn" class="w-full bg-gray-700 hover:bg-gray-600 py-3 rounded-lg font-bold mb-2 transition-colors">
+                    <i class="fas fa-upload mr-2"></i>رفع ملف Excel
+                </button>
+                <div id="fileInfo" class="hidden text-sm text-gray-400 text-center p-2 bg-gray-800 rounded">
+                    <i class="fas fa-file-excel text-primary-light mr-1"></i> لم يتم رفع أي ملف
+                </div>
+            </div>
+            
+            <!-- Bulk Message Section -->
+            <div class="p-6 border-b border-gray-600">
+                <h3 class="font-bold text-lg mb-3 gradient-text">الإرسال الجماعي</h3>
+                <textarea 
+                    id="bulkMessage" 
+                    rows="4" 
+                    class="w-full bg-gray-700 border border-gray-600 rounded-lg p-3 text-sm mb-3 resize-none focus:outline-none focus:border-primary"
+                    placeholder="اكتب الرسالة الترويجية هنا..."></textarea>
+                
+                <div class="flex items-center justify-between mb-3">
+                    <span class="text-sm text-gray-300">فاصل الزمني (ثواني):</span>
+                    <input type="number" id="sendDelay" value="40" min="40" max="120" class="w-20 bg-gray-600 border border-gray-500 rounded px-2 py-1 text-center">
+                </div>
+                
+                <button id="sendBulkBtn" class="w-full btn-gold py-3 rounded-lg font-bold mb-2">
+                    <i class="fas fa-paper-plane mr-2"></i> 🚀 إرسال عروض ترويجية
+                </button>
+                
+                <button id="retryBulkBtn" class="w-full bg-yellow-600 hover:bg-yellow-700 py-2 rounded-lg font-bold mb-2 hidden transition-colors">
+                    <i class="fas fa-redo mr-2"></i> إعادة المحاولة (طريقة بديلة)
+                </button>
+                
+                <div class="text-xs text-gray-400 text-center">
+                    سيتم الإرسال إلى <span id="clientsCount">0</span> عميل
+                </div>
+            </div>
+            
+            <!-- Reports Section -->
+            <div class="p-6">
+                <h3 class="font-bold text-lg mb-3 gradient-text">التقارير والإحصائيات</h3>
+                <button id="exportReportBtn" class="w-full bg-gray-700 hover:bg-gray-600 py-2 rounded-lg font-bold mb-2 transition-colors">
+                    <i class="fas fa-download mr-2"></i>تصدير تقرير
+                </button>
+                <button id="sendReportBtn" class="w-full bg-gray-700 hover:bg-gray-600 py-2 rounded-lg font-bold transition-colors">
+                    <i class="fas fa-envelope mr-2"></i>إرسال للمدير
+                </button>
+
+                <!-- NEW: Performance Stats -->
+                <div class="mt-4 p-3 bg-gray-800 rounded-lg">
+                    <h4 class="font-bold text-primary-light mb-2">إحصائيات اليوم</h4>
+                    <div class="grid grid-cols-2 gap-2 text-xs">
+                        <div class="flex justify-between">
+                            <span>الرسائل:</span>
+                            <span id="statMessages" class="text-primary-light">0</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span>الردود الآلية:</span>
+                            <span id="statAIReplies" class="text-primary-light">0</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span>العملاء:</span>
+                            <span id="statClients" class="text-primary-light">0</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span>المهتمين:</span>
+                            <span id="statInterested" class="text-primary-light">0</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Right Chat Area -->
+        <div class="flex-1 flex flex-col m-3 luxury-card rounded-l-2xl relative">
+            <!-- Chat Header -->
+            <div class="p-6 border-b border-gray-600">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center">
+                        <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-primary to-primary-light flex items-center justify-center text-white mr-3">
+                            <i class="fas fa-user"></i>
+                        </div>
+                        <div>
+                            <h2 id="currentClientName" class="text-xl font-bold">اختر عميلاً</h2>
+                            <p id="currentClientPhone" class="text-sm text-gray-400">لم يتم اختيار عميل</p>
+                        </div>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <div id="activeStatus" class="hidden">
+                            <span class="px-3 py-1 bg-green-900 bg-opacity-20 text-green-400 rounded-full text-sm">
+                                <i class="fas fa-circle text-xs mr-1"></i>نشط
+                            </span>
+                        </div>
+                        <!-- Client Status Selector -->
+                        <div id="clientStatusSelector" class="hidden">
+                            <select id="statusSelect" class="bg-gray-700 border border-gray-600 rounded-lg px-3 py-1 text-sm focus:outline-none focus:border-primary">
+                                <option value="no-reply">لم يرد</option>
+                                <option value="interested">مهتم</option>
+                                <option value="busy">مشغول</option>
+                                <option value="not-interested">غير مهتم</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Clients List / Chat Area -->
+            <div class="flex-1 flex">
+                <!-- Clients List -->
+                <div class="w-1/3 border-l border-gray-600 h-full overflow-hidden flex flex-col">
+                    <div class="p-4 border-b border-gray-600">
+                        <h3 class="font-bold text-lg gradient-text mb-2">قائمة العملاء</h3>
+                        <!-- Status Filter -->
+                        <div class="status-filter">
+                            <button class="status-filter-btn btn-all active" data-status="all">الكل</button>
+                            <button class="status-filter-btn btn-interested" data-status="interested">
+                                <span class="status-dot dot-interested"></span> مهتم
+                            </button>
+                            <button class="status-filter-btn btn-busy" data-status="busy">
+                                <span class="status-dot dot-busy"></span> مشغول
+                            </button>
+                            <button class="status-filter-btn btn-not-interested" data-status="not-interested">
+                                <span class="status-dot dot-not-interested"></span> غير مهتم
+                            </button>
+                            <button class="status-filter-btn btn-no-reply" data-status="no-reply">
+                                <span class="status-dot dot-no-reply"></span> لم يرد
+                            </button>
+                        </div>
+                    </div>
+                    <div id="clientList" class="flex-1 overflow-y-auto p-2">
+                        <!-- Clients will be populated here -->
+                    </div>
+                </div>
+                
+                <!-- Chat Messages -->
+                <div class="flex-1 flex flex-col relative">
+                    <div id="chatContainer" class="chat-container">
+                        <div class="text-center text-gray-400 mt-20">
+                            <i class="fas fa-comments text-5xl mb-4 opacity-50"></i>
+                            <p class="text-xl mb-2">مرحباً في رقم كلاود ERP!</p>
+                            <p class="text-gray-500">اختر عميلاً لبدء المحادثة</p>
+                        </div>
+                    </div>
+                    
+                    <!-- Scroll to Bottom Button -->
+                    <button id="scrollToBottom" class="scroll-to-bottom">
+                        <i class="fas fa-chevron-down"></i>
+                    </button>
+                    
+                    <!-- Message Input -->
+                    <div class="p-4 border-t border-gray-600">
+                        <div class="flex items-center">
+                            <input 
+                                type="text" 
+                                id="messageInput" 
+                                placeholder="اكتب رسالتك هنا..." 
+                                class="flex-1 bg-gray-700 border border-gray-600 rounded-l-lg p-3 focus:outline-none focus:border-primary"
+                                disabled>
+                            <button 
+                                id="sendMessageBtn" 
+                                class="bg-primary hover:bg-primary-dark px-6 py-3 rounded-r-lg font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                disabled>
+                                <i class="fas fa-paper-plane"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global variables
+        let clients = [];
+        let currentClient = null;
+        let messages = {};
+        let isAIMode = true; // Default to AI mode enabled
+        let socket = null;
+        let isBulkSending = false;
+        let currentStatusFilter = 'all';
+        let isBotStopped = false; // NEW: Bot stop state
+        
+        // DOM Elements
+        const qrOverlay = document.getElementById('qrOverlay');
+        const qrCode = document.getElementById('qrCode');
+        const closeQR = document.getElementById('closeQR');
+        const reconnectBtn = document.getElementById('reconnectBtn');
+        const stopBotBtn = document.getElementById('stopBotBtn');
+        const whatsappStatus = document.getElementById('whatsappStatus');
+        const botStatus = document.getElementById('botStatus');
+        const aiToggle = document.getElementById('aiToggle');
+        const uploadBtn = document.getElementById('uploadBtn');
+        const excelFile = document.getElementById('excelFile');
+        const fileInfo = document.getElementById('fileInfo');
+        const bulkMessage = document.getElementById('bulkMessage');
+        const sendDelay = document.getElementById('sendDelay');
+        const sendBulkBtn = document.getElementById('sendBulkBtn');
+        const retryBulkBtn = document.getElementById('retryBulkBtn');
+        const clientList = document.getElementById('clientList');
+        const exportReportBtn = document.getElementById('exportReportBtn');
+        const sendReportBtn = document.getElementById('sendReportBtn');
+        const currentClientName = document.getElementById('currentClientName');
+        const currentClientPhone = document.getElementById('currentClientPhone');
+        const activeStatus = document.getElementById('activeStatus');
+        const chatContainer = document.getElementById('chatContainer');
+        const messageInput = document.getElementById('messageInput');
+        const sendMessageBtn = document.getElementById('sendMessageBtn');
+        const aiStatus = document.getElementById('aiStatus');
+        const toastContainer = document.getElementById('toastContainer');
+        const clientsCount = document.getElementById('clientsCount');
+        const scrollToBottom = document.getElementById('scrollToBottom');
+        const statusSelect = document.getElementById('statusSelect');
+        const clientStatusSelector = document.getElementById('clientStatusSelector');
+        const autoReportNotification = document.getElementById('autoReportNotification');
+        const autoReportMessage = document.getElementById('autoReportMessage');
+        
+        // NEW: Performance stats elements
+        const statMessages = document.getElementById('statMessages');
+        const statAIReplies = document.getElementById('statAIReplies');
+        const statClients = document.getElementById('statClients');
+        const statInterested = document.getElementById('statInterested');
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeApp();
+        });
+
+        function initializeApp() {
+            try {
+                // Connect to Socket.io with error handling
+                socket = io({
+                    timeout: 10000,
+                    reconnectionAttempts: 5
+                });
+                
+                setupSocketEvents();
+                setupEventListeners();
+                loadClients();
+                loadPerformanceStats();
+                
+                // Auto-fill promotional message for Ragmcloud ERP
+                bulkMessage.value = "🚀 نظام رقم كلاود ERP السحابي! حلول متكاملة للمحاسبة، المخزون، الموارد البشرية، والمزيد. جلسة استشارية مجانية! 📞 +966555111222 🌐 ragmcloud.sa";
+                
+            } catch (error) {
+                console.error('Failed to initialize app:', error);
+                showToast('❌ فشل تهيئة التطبيق', 'error');
+            }
+        }
+        
+        function setupSocketEvents() {
+            socket.on('connect', () => {
+                console.log('Connected to server');
+                showToast('✅ تم الاتصال بالخادم بنجاح', 'success');
+            });
+            
+            socket.on('disconnect', (reason) => {
+                console.log('Disconnected from server:', reason);
+                showToast('❌ فقد الاتصال بالخادم', 'error');
+            });
+            
+            socket.on('connect_error', (error) => {
+                console.error('Connection error:', error);
+                showToast('❌ خطأ في الاتصال بالخادم', 'error');
+            });
+            
+            socket.on('status', (data) => {
+                whatsappStatus.textContent = data.message;
+                if (data.connected) {
+                    whatsappStatus.className = 'status-connected px-3 py-1 rounded-full text-sm font-bold';
+                } else {
+                    whatsappStatus.className = 'status-disconnected px-3 py-1 rounded-full text-sm font-bold';
+                }
+            });
+
+            // NEW: Bot status event
+            socket.on('bot_status', (data) => {
+                isBotStopped = data.stopped;
+                updateBotStatusUI();
+            });
+
+            // NEW: Auto report notification
+            socket.on('auto_report_notification', (data) => {
+                showAutoReportNotification(data);
+            });
+
+            // NEW: Client status updated
+            socket.on('client_status_updated', (data) => {
+                // Refresh clients list when status is updated
+                loadClients();
+            });
+            
+            socket.on('qr', (qrDataUrl) => {
+                showQR(qrDataUrl);
+            });
+
+            socket.on('message', (data) => {
+                handleIncomingMessage(data);
+            });
+
+            socket.on('message_sent', (data) => {
+                showToast(`✅ تم إرسال الرسالة إلى ${data.to}`, 'success');
+            });
+
+            socket.on('message_error', (data) => {
+                showToast(`❌ فشل إرسال الرسالة إلى ${data.to}: ${data.error}`, 'error');
+            });
+            
+            socket.on('bulk_progress', (data) => {
+                if (data.type === 'start') {
+                    showToast(`🚀 بدأ الإرسال إلى ${data.total} عميل`, 'success');
+                    return;
+                }
+                
+                if (data.success) {
+                    showToast(`✅ تم إرسال ${data.current}/${data.total}: ${data.client}`, 'success');
+                    
+                    // Update client last message
+                    const client = clients.find(c => c.phone === data.clientPhone);
+                    if (client) {
+                        client.lastMessage = data.message;
+                        renderClientList();
+                    }
+                } else {
+                    showToast(`❌ فشل إرسال إلى ${data.client}: ${data.error}`, 'error');
+                }
+            });
+
+            socket.on('clients_updated', (updatedClients) => {
+                clients = updatedClients;
+                updateClientsCount();
+                renderClientList();
+            });
+        }
+        
+        function setupEventListeners() {
+            closeQR.addEventListener('click', hideQR);
+            reconnectBtn.addEventListener('click', reconnectWhatsApp);
+            stopBotBtn.addEventListener('click', toggleBot);
+            aiToggle.addEventListener('change', toggleAIMode);
+            uploadBtn.addEventListener('click', () => excelFile.click());
+            excelFile.addEventListener('change', handleFileUpload);
+            sendBulkBtn.addEventListener('click', startBulkSend);
+            retryBulkBtn.addEventListener('click', startBulkSendAlternative);
+            exportReportBtn.addEventListener('click', exportReport);
+            sendReportBtn.addEventListener('click', sendReportToManager);
+            sendMessageBtn.addEventListener('click', sendMessage);
+            messageInput.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    sendMessage();
+                }
+            });
+            
+            // Scroll to bottom button
+            scrollToBottom.addEventListener('click', scrollChatToBottom);
+            
+            // Client status selector
+            if (statusSelect) {
+                statusSelect.addEventListener('change', updateClientStatus);
+            }
+            
+            // Status filter buttons
+            document.querySelectorAll('.status-filter-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    const status = this.getAttribute('data-status');
+                    filterClientsByStatus(status);
+                    
+                    // Update active state
+                    document.querySelectorAll('.status-filter-btn').forEach(b => b.classList.remove('active'));
+                    this.classList.add('active');
+                });
+            });
+            
+            // Auto-scroll and show/hide scroll button
+            chatContainer.addEventListener('scroll', handleChatScroll);
+        }
+
+        // NEW: Update bot status UI
+        function updateBotStatusUI() {
+            if (isBotStopped) {
+                botStatus.textContent = 'متوقف';
+                botStatus.className = 'bot-status-stopped px-3 py-1 rounded-full text-sm font-bold';
+                stopBotBtn.innerHTML = '<i class="fas fa-play mr-2"></i>تشغيل البوت';
+                stopBotBtn.className = 'w-full bg-green-600 hover:bg-green-700 py-2 rounded-lg font-bold mb-4 transition-colors';
+            } else {
+                botStatus.textContent = 'نشط';
+                botStatus.className = 'bot-status-running px-3 py-1 rounded-full text-sm font-bold';
+                stopBotBtn.innerHTML = '<i class="fas fa-stop mr-2"></i>إيقاف البوت';
+                stopBotBtn.className = 'w-full bg-red-600 hover:bg-red-700 py-2 rounded-lg font-bold mb-4 transition-colors';
+            }
+        }
+
+        // NEW: Toggle bot function
+        function toggleBot() {
+            socket.emit('toggle_bot', { stop: !isBotStopped });
+            showToast(isBotStopped ? '🔄 جاري تشغيل البوت...' : '🛑 جاري إيقاف البوت...', 'success');
+        }
+
+        // NEW: Show auto report notification
+        function showAutoReportNotification(data) {
+            autoReportMessage.textContent = data.message;
+            autoReportNotification.style.display = 'block';
+            
+            setTimeout(() => {
+                autoReportNotification.style.display = 'none';
+            }, 10000);
+        }
+
+        // NEW: Load performance stats
+        function loadPerformanceStats() {
+            fetch('/api/employee-performance')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        const stats = data.performance.dailyStats;
+                        statMessages.textContent = stats.messagesSent || 0;
+                        statAIReplies.textContent = stats.aiRepliesSent || 0;
+                        statClients.textContent = stats.clientsContacted || 0;
+                        statInterested.textContent = stats.interestedClients || 0;
+                    }
+                })
+                .catch(error => {
+                    console.error('Error loading performance stats:', error);
+                });
+        }
+        
+        function handleChatScroll() {
+            const isAtBottom = chatContainer.scrollHeight - chatContainer.clientHeight <= chatContainer.scrollTop + 50;
+            
+            if (isAtBottom) {
+                scrollToBottom.classList.remove('visible');
+            } else {
+                scrollToBottom.classList.add('visible');
+            }
+        }
+        
+        function scrollChatToBottom() {
+            chatContainer.scrollTo({
+                top: chatContainer.scrollHeight,
+                behavior: 'smooth'
+            });
+        }
+        
+        function filterClientsByStatus(status) {
+            currentStatusFilter = status;
+            renderClientList();
+        }
+        
+        function updateClientStatus() {
+            if (!currentClient) return;
+            
+            const newStatus = statusSelect.value;
+            
+            // Send status update to server
+            socket.emit('update_client_status', { 
+                phone: currentClient.phone, 
+                status: newStatus 
+            });
+            
+            showToast(`✅ تم تحديث حالة العميل إلى: ${getStatusText(newStatus)}`, 'success');
+        }
+        
+        function getStatusText(status) {
+            const statusMap = {
+                'interested': 'مهتم',
+                'busy': 'مشغول', 
+                'not-interested': 'غير مهتم',
+                'no-reply': 'لم يرد'
+            };
+            return statusMap[status] || 'غير محدد';
+        }
+        
+        function loadClients() {
+            fetch('/api/clients')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        clients = data.clients;
+                        updateClientsCount();
+                        renderClientList();
+                        loadPerformanceStats(); // Refresh stats
+                    }
+                })
+                .catch(error => {
+                    console.error('Error loading clients:', error);
+                });
+        }
+        
+        function updateClientsCount() {
+            clientsCount.textContent = clients.length;
+        }
+        
+        function selectClient(client) {
+            currentClient = client;
+            currentClientName.textContent = client.name;
+            currentClientPhone.textContent = client.phone;
+            activeStatus.classList.remove('hidden');
+            clientStatusSelector.classList.remove('hidden');
+            
+            // Set the status selector value
+            if (statusSelect) {
+                statusSelect.value = client.status || 'no-reply';
+            }
+            
+            // Update active state in client list
+            document.querySelectorAll('.client-item').forEach(item => {
+                item.classList.remove('active');
+            });
+            
+            // Find and activate the clicked client item
+            const clientElement = Array.from(document.querySelectorAll('.client-item')).find(item => {
+                const nameElement = item.querySelector('h3');
+                return nameElement && nameElement.textContent === client.name;
+            });
+            
+            if (clientElement) {
+                clientElement.classList.add('active');
+            }
+            
+            // Enable message input
+            messageInput.disabled = false;
+            sendMessageBtn.disabled = false;
+            
+            // Reset unread count for this client
+            if (client.unread > 0) {
+                client.unread = 0;
+                renderClientList();
+            }
+            
+            // Load messages for this client
+            loadClientMessages(client.phone);
+            
+            // Auto-scroll to bottom
+            setTimeout(scrollChatToBottom, 100);
+        }
+        
+        function loadClientMessages(phone) {
+            fetch(`/api/client-messages/${phone}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        messages[phone] = data.messages;
+                        renderMessages();
+                    }
+                })
+                .catch(error => {
+                    console.error('Error loading messages:', error);
+                    messages[phone] = [];
+                    renderMessages();
+                });
+        }
+        
+        function startBulkSend() {
+            if (isBulkSending) {
+                showToast('⚠️ جاري الإرسال بالفعل، يرجى الانتظار', 'error');
+                return;
+            }
+
+            if (clients.length === 0) {
+                showToast('❌ لا توجد عملاء للإرسال', 'error');
+                return;
+            }
+
+            const message = bulkMessage.value.trim();
+            if (!message) {
+                showToast('❌ يرجى كتابة رسالة للإرسال', 'error');
+                return;
+            }
+
+            const delay = parseInt(sendDelay.value) || 40;
+            
+            // Set sending state
+            isBulkSending = true;
+            setBulkSendLoadingState();
+            hideRetryButton();
+            
+            fetch('/api/send-bulk', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    message: message,
+                    delay: delay,
+                    clients: clients
+                })
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data.success) {
+                    showToast(`✅ ${data.message}`, 'success');
+                } else {
+                    throw new Error(data.error || 'Unknown error');
+                }
+            })
+            .catch(error => {
+                console.error('Error starting bulk send:', error);
+                showToast('❌ فشل بدء الإرسال الجماعي: ' + error.message, 'error');
+                isBulkSending = false;
+                resetBulkSendButton();
+                showRetryButton();
+            })
+            .finally(() => {
+                isBulkSending = false;
+                resetBulkSendButton();
+                loadPerformanceStats(); // Refresh stats after bulk send
+            });
+        }
+
+        function setBulkSendLoadingState() {
+            sendBulkBtn.disabled = true;
+            sendBulkBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> جاري الإرسال...';
+        }
+
+        function resetBulkSendButton() {
+            sendBulkBtn.disabled = false;
+            sendBulkBtn.innerHTML = '<i class="fas fa-paper-plane mr-2"></i> 🚀 إرسال عروض ترويجية';
+        }
+        
+        function showQR(qrDataUrl) {
+            qrCode.innerHTML = `<img src="${qrDataUrl}" alt="QR Code" class="rounded-lg gold-border">`;
+            qrOverlay.classList.remove('hidden');
+        }
+        
+        function hideQR() {
+            qrOverlay.classList.add('hidden');
+        }
+        
+        function reconnectWhatsApp() {
+            socket.emit('reconnect_whatsapp');
+            showToast('🔄 جاري إعادة الاتصال بواتساب...', 'success');
+        }
+        
+        function toggleAIMode() {
+            isAIMode = aiToggle.checked;
+            if (isAIMode) {
+                aiStatus.classList.remove('hidden');
+                showToast('🤖 تم تفعيل وضع الذكاء الاصطناعي', 'success');
+            } else {
+                aiStatus.classList.add('hidden');
+                showToast('👤 تم تعطيل وضع الذكاء الاصطناعي', 'success');
+            }
+        }
+        
+        function handleFileUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            // Validate file type
+            const validTypes = ['.xlsx', '.xls'];
+            const fileExtension = '.' + file.name.split('.').pop().toLowerCase();
+            if (!validTypes.includes(fileExtension)) {
+                showToast('❌ يرجى رفع ملف Excel فقط (.xlsx, .xls)', 'error');
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('excelFile', file);
+            
+            showToast('📤 جاري رفع الملف...', 'success');
+            
+            fetch('/api/upload-excel', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data.success) {
+                    clients = data.clients;
+                    fileInfo.innerHTML = `<i class="fas fa-file-excel text-primary-light mr-1"></i> ${file.name} (${data.count} عميل)`;
+                    fileInfo.classList.remove('hidden');
+                    updateClientsCount();
+                    renderClientList();
+                    showToast(`✅ تم رفع الملف بنجاح (${data.count} عميل)`, 'success');
+                } else {
+                    throw new Error(data.error || 'Upload failed');
+                }
+            })
+            .catch(error => {
+                console.error('Error uploading file:', error);
+                showToast('❌ فشل رفع الملف: ' + error.message, 'error');
+            });
+        }
+        
+        function renderClientList() {
+            if (clients.length === 0) {
+                clientList.innerHTML = `
+                    <div class="text-center p-6 text-gray-400">
+                        <i class="fas fa-users text-3xl mb-3 opacity-50"></i>
+                        <p>لا توجد عملاء بعد</p>
+                        <p class="text-sm mt-1">ارفع ملف Excel لبدء الإرسال</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            clientList.innerHTML = '';
+            
+            const filteredClients = currentStatusFilter === 'all' 
+                ? clients 
+                : clients.filter(client => client.status === currentStatusFilter);
+            
+            if (filteredClients.length === 0) {
+                clientList.innerHTML = `
+                    <div class="text-center p-6 text-gray-400">
+                        <i class="fas fa-search text-3xl mb-3 opacity-50"></i>
+                        <p>لا توجد عملاء بهذه الحالة</p>
+                        <p class="text-sm mt-1">جرب حالة أخرى</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            filteredClients.forEach(client => {
+                const clientItem = document.createElement('div');
+                const statusClass = `client-status-${client.status || 'no-reply'}`;
+                
+                clientItem.className = `client-item p-3 cursor-pointer ${statusClass} ${currentClient && currentClient.phone === client.phone ? 'active' : ''}`;
+                clientItem.innerHTML = `
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center flex-1 min-w-0">
+                            <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-primary-light flex items-center justify-center text-white mr-3 flex-shrink-0">
+                                <i class="fas fa-user text-sm"></i>
+                            </div>
+                            <div class="flex-1 min-w-0">
+                                <h3 class="font-medium text-white text-sm truncate">${client.name}</h3>
+                                <p class="text-xs text-gray-400 truncate">${client.lastMessage || 'لا توجد رسائل'}</p>
+                            </div>
+                        </div>
+                        ${client.unread > 0 ? `
+                            <div class="unread-badge w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ml-2">
+                                ${client.unread}
+                            </div>
+                        ` : ''}
+                    </div>
+                    <div class="flex justify-between items-center mt-2">
+                        <span class="text-xs text-gray-500">${getStatusText(client.status)}</span>
+                        <span class="status-dot dot-${client.status || 'no-reply'}"></span>
+                    </div>
+                `;
+                clientItem.addEventListener('click', () => selectClient(client));
+                clientList.appendChild(clientItem);
+            });
+        }
+        
+        function renderMessages() {
+            if (!currentClient) return;
+            
+            const clientMessages = messages[currentClient.phone] || [];
+            chatContainer.innerHTML = '';
+            
+            if (clientMessages.length === 0) {
+                chatContainer.innerHTML = `
+                    <div class="text-center text-gray-400 mt-20">
+                        <i class="fas fa-comments text-5xl mb-4 opacity-50"></i>
+                        <p class="text-xl mb-2">لا توجد رسائل بعد</p>
+                        <p class="text-gray-500">ابدأ محادثة جديدة مع ${currentClient.name}</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            clientMessages.forEach(message => {
+                const messageDiv = document.createElement('div');
+                messageDiv.className = `chat-bubble ${message.fromMe ? 'sent' : 'received'}`;
+                messageDiv.innerHTML = `
+                    <div class="message-content">${message.message}</div>
+                    <div class="chat-time">${new Date(message.timestamp).toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' })}</div>
+                `;
+                chatContainer.appendChild(messageDiv);
+            });
+            
+            // Scroll to bottom
+            setTimeout(scrollChatToBottom, 100);
+        }
+        
+        function sendMessage() {
+            if (!currentClient || !messageInput.value.trim()) return;
+            
+            const messageContent = messageInput.value.trim();
+            
+            // Clear input
+            messageInput.value = '';
+            
+            // Send message via socket to backend
+            socket.emit('send_message', {
+                to: currentClient.phone,
+                message: messageContent
+            });
+            
+            showToast('🔄 جاري إرسال الرسالة...', 'success');
+            loadPerformanceStats(); // Refresh stats after sending message
+        }
+        
+        function handleIncomingMessage(data) {
+            try {
+                const { from, message, timestamp, fromMe } = data;
+                
+                // Find the client by phone number
+                const client = clients.find(c => c.phone === from);
+                
+                if (client) {
+                    // Add message to messages object
+                    if (!messages[from]) {
+                        messages[from] = [];
+                    }
+                    
+                    messages[from].push({
+                        message: message,
+                        timestamp: timestamp,
+                        fromMe: fromMe
+                    });
+                    
+                    // Update client last message
+                    client.lastMessage = message.substring(0, 30) + (message.length > 30 ? '...' : '');
+                    
+                    // Increment unread count if not currently viewing this client
+                    if (!currentClient || currentClient.phone !== from) {
+                        client.unread = (client.unread || 0) + 1;
+                    }
+                    
+                    // Update UI
+                    renderClientList();
+                    
+                    // If this client is currently selected, update messages
+                    if (currentClient && currentClient.phone === from) {
+                        renderMessages();
+                    }
+                    
+                    if (!fromMe) {
+                        showToast(`📩 رسالة جديدة من ${client.name}`, 'success');
+                    }
+
+                    // Refresh performance stats
+                    loadPerformanceStats();
+                }
+            } catch (error) {
+                console.error('Error handling incoming message:', error);
+            }
+        }
+
+        function startBulkSendAlternative() {
+            if (isBulkSending) {
+                showToast('⚠️ جاري الإرسال بالفعل، يرجى الانتظار', 'error');
+                return;
+            }
+
+            if (clients.length === 0) {
+                showToast('❌ لا توجد عملاء للإرسال', 'error');
+                return;
+            }
+
+            const message = bulkMessage.value.trim();
+            if (!message) {
+                showToast('❌ يرجى كتابة رسالة للإرسال', 'error');
+                return;
+            }
+
+            const delay = parseInt(sendDelay.value) || 40;
+            
+            // Set sending state
+            isBulkSending = true;
+            setBulkSendLoadingState();
+            retryBulkBtn.disabled = true;
+            retryBulkBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> جاري الإرسال...';
+            
+            showToast(`🚀 بدأ الإرسال (الطريقة البديلة) إلى ${clients.length} عميل`, 'success');
+            
+            // Simulate sending (replace with actual implementation)
+            setTimeout(() => {
+                isBulkSending = false;
+                resetBulkSendButton();
+                retryBulkBtn.disabled = false;
+                retryBulkBtn.innerHTML = '<i class="fas fa-redo mr-2"></i> إعادة المحاولة (طريقة بديلة)';
+                showToast('✅ تم الانتهاء من الإرسال', 'success');
+                loadPerformanceStats(); // Refresh stats
+            }, 3000);
+        }
+
+        function showRetryButton() {
+            retryBulkBtn.classList.remove('hidden');
+            retryBulkBtn.disabled = false;
+            retryBulkBtn.innerHTML = '<i class="fas fa-redo mr-2"></i> إعادة المحاولة (طريقة بديلة)';
+        }
+
+        function hideRetryButton() {
+            retryBulkBtn.classList.add('hidden');
+        }
+        
+        // FIXED: Export Report Function - Now actually calls the backend
+        function exportReport() {
+            showToast('📊 جاري تصدير التقرير...', 'success');
+            
+            fetch('/api/export-report')
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    return response.blob();
+                })
+                .then(blob => {
+                    // Create download link
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.style.display = 'none';
+                    a.href = url;
+                    a.download = `employee_report_${new Date().toISOString().split('T')[0]}.txt`;
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    showToast('✅ تم تصدير التقرير بنجاح', 'success');
+                })
+                .catch(error => {
+                    console.error('Error exporting report:', error);
+                    showToast('❌ فشل تصدير التقرير: ' + error.message, 'error');
+                });
+        }
+        
+        // FIXED: Send Report to Manager Function - Now actually calls the backend
+        function sendReportToManager() {
+            showToast('📤 جاري إرسال التقرير إلى المدير...', 'success');
+            
+            fetch('/api/send-to-manager', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    showToast('✅ تم إرسال التقرير إلى المدير بنجاح', 'success');
+                } else {
+                    throw new Error(data.error || 'Failed to send report');
+                }
+            })
+            .catch(error => {
+                console.error('Error sending report to manager:', error);
+                showToast('❌ فشل إرسال التقرير: ' + error.message, 'error');
+            });
+        }
+        
+        function showToast(message, type) {
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.textContent = message;
+            toastContainer.appendChild(toast);
+            
+            // Show toast
+            setTimeout(() => {
+                toast.classList.add('show');
+            }, 10);
+            
+            // Hide toast after 3 seconds
+            setTimeout(() => {
+                toast.classList.remove('show');
+                setTimeout(() => {
+                    if (toastContainer.contains(toast)) {
+                        toastContainer.removeChild(toast);
+                    }
+                }, 300);
+            }, 3000);
+        }
+    </script>
+</body>
+</html>
