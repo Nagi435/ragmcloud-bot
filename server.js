@@ -70,7 +70,7 @@ client.on('qr', async (qr) => {
   console.log('QR Code generated');
   try {
     const qrImage = await QRCode.toDataURL(qr);
-    io.emit('qr', qrImage);
+    io.emit('qr', { qr: qrImage });
   } catch (err) {
     console.error('QR conversion error:', err);
     io.emit('qr_error', 'Failed to generate QR image');
@@ -181,3 +181,4 @@ server.listen(PORT, () => {
 
 // Initialize WhatsApp client
 client.initialize();
+
