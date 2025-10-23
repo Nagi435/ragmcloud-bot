@@ -1,4 +1,4 @@
-// server.js
+// server.js - Main Server File
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
@@ -11,7 +11,7 @@ const path = require('path');
 const XLSX = require('xlsx');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { db, dbHelper } = require('./database');
+const sqlite3 = require('sqlite3').verbose();
 
 // Load environment variables
 require('dotenv').config();
@@ -36,7 +36,7 @@ app.use((req, res, next) => {
 });
 
 // Serve static files
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static('public'));
 
 // Create required directories
 const directories = ['uploads', 'memory', 'tmp', 'reports', 'sessions', 'public'];
@@ -60,22 +60,209 @@ const upload = multer({ storage: storage });
 // JWT Secret
 const JWT_SECRET = process.env.JWT_SECRET || 'ragmcloud-erp-bot-secret-key-2024';
 
-// Authentication middleware
-const authenticateToken = (req, res, next) => {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
+// Database setup
+const dbPath = path.join(__dirname, 'erp_bot.db');
+const db = new sqlite3.Database(dbPath);
 
-    if (!token) {
-        return res.status(401).json({ error: 'الوصول مرفوض. يرجى تسجيل الدخول.' });
+// Initialize database
+db.serialize(() => {
+    // Users table
+    db.run(`CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE NOT NULL,
+        password TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'user',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        last_login DATETIME,
+        is_active INTEGER DEFAULT 1
+    )`);
+
+    // Conversations table
+    db.run(`CREATE TABLE IF NOT EXISTS conversations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        client_phone TEXT NOT NULL,
+        message_text TEXT NOT NULL,
+        message_type TEXT NOT NULL,
+        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users (id)
+    )`);
+
+    // Clients table
+    db.run(`CREATE TABLE IF NOT EXISTS clients (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        phone TEXT UNIQUE NOT NULL,
+        name TEXT,
+        status TEXT DEFAULT 'new',
+        last_message TEXT,
+        last_activity DATETIME,
+        assigned_user_id INTEGER,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (assigned_user_id) REFERENCES users (id)
+    )`);
+
+    // Employee Performance table
+    db.run(`CREATE TABLE IF NOT EXISTS employee_performance (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        date TEXT NOT NULL,
+        messages_sent INTEGER DEFAULT 0,
+        clients_contacted INTEGER DEFAULT 0,
+        ai_replies_sent INTEGER DEFAULT 0,
+        bulk_campaigns INTEGER DEFAULT 0,
+        interested_clients INTEGER DEFAULT 0,
+        start_time DATETIME,
+        last_activity DATETIME,
+        FOREIGN KEY (user_id) REFERENCES users (id)
+    )`);
+
+    // Insert default admin user (HIDDEN CREDENTIALS)
+    const adminPassword = bcrypt.hashSync('@Admin4040', 10);
+    db.run(`INSERT OR IGNORE INTO users (username, password, role) VALUES (?, ?, ?)`, 
+        ['IT', adminPassword, 'admin']);
+});
+
+// Database helper functions
+const dbHelper = {
+    getUserByUsername: (username) => {
+        return new Promise((resolve, reject) => {
+            db.get('SELECT * FROM users WHERE username = ? AND is_active = 1', [username], (err, row) => {
+                if (err) reject(err);
+                else resolve(row);
+            });
+        });
+    },
+
+    createUser: (username, password, role = 'user') => {
+        return new Promise((resolve, reject) => {
+            const hashedPassword = bcrypt.hashSync(password, 10);
+            db.run('INSERT INTO users (username, password, role) VALUES (?, ?, ?)', 
+                [username, hashedPassword, role], function(err) {
+                if (err) reject(err);
+                else resolve({ id: this.lastID });
+            });
+        });
+    },
+
+    updateUserLastLogin: (userId) => {
+        db.run('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?', [userId]);
+    },
+
+    getAllUsers: () => {
+        return new Promise((resolve, reject) => {
+            db.all('SELECT id, username, role, created_at, last_login, is_active FROM users', (err, rows) => {
+                if (err) reject(err);
+                else resolve(rows);
+            });
+        });
+    },
+
+    saveConversation: (userId, clientPhone, message, messageType) => {
+        return new Promise((resolve, reject) => {
+            db.run(`INSERT INTO conversations (user_id, client_phone, message_text, message_type) 
+                    VALUES (?, ?, ?, ?)`, 
+                [userId, clientPhone, message, messageType], function(err) {
+                if (err) reject(err);
+                else resolve({ id: this.lastID });
+            });
+        });
+    },
+
+    getConversationsByUser: (userId, clientPhone = null) => {
+        return new Promise((resolve, reject) => {
+            let query = `SELECT * FROM conversations WHERE user_id = ?`;
+            let params = [userId];
+            
+            if (clientPhone) {
+                query += ` AND client_phone = ?`;
+                params.push(clientPhone);
+            }
+            
+            query += ` ORDER BY timestamp DESC LIMIT 50`;
+            
+            db.all(query, params, (err, rows) => {
+                if (err) reject(err);
+                else resolve(rows);
+            });
+        });
+    },
+
+    saveOrUpdateClient: (phone, name, assignedUserId = null) => {
+        return new Promise((resolve, reject) => {
+            db.run(`INSERT OR REPLACE INTO clients (phone, name, assigned_user_id, last_activity) 
+                    VALUES (?, ?, ?, CURRENT_TIMESTAMP)`, 
+                [phone, name, assignedUserId], function(err) {
+                if (err) reject(err);
+                else resolve({ id: this.lastID });
+            });
+        });
+    },
+
+    getClientsByUser: (userId) => {
+        return new Promise((resolve, reject) => {
+            db.all(`SELECT c.*, COUNT(conv.id) as message_count 
+                    FROM clients c 
+                    LEFT JOIN conversations conv ON c.phone = conv.client_phone AND conv.user_id = ?
+                    WHERE c.assigned_user_id = ?
+                    GROUP BY c.phone
+                    ORDER BY c.last_activity DESC`, 
+                [userId, userId], (err, rows) => {
+                if (err) reject(err);
+                else resolve(rows);
+            });
+        });
+    },
+
+    getAllClients: () => {
+        return new Promise((resolve, reject) => {
+            db.all(`SELECT c.*, u.username as assigned_user, COUNT(conv.id) as message_count 
+                    FROM clients c 
+                    LEFT JOIN users u ON c.assigned_user_id = u.id
+                    LEFT JOIN conversations conv ON c.phone = conv.client_phone
+                    GROUP BY c.phone
+                    ORDER BY c.last_activity DESC`, (err, rows) => {
+                if (err) reject(err);
+                else resolve(rows);
+            });
+        });
+    },
+
+    updateEmployeePerformance: (userId, date, field, increment = 1) => {
+        return new Promise((resolve, reject) => {
+            db.run(`INSERT OR IGNORE INTO employee_performance (user_id, date, start_time) 
+                    VALUES (?, ?, CURRENT_TIMESTAMP)`, [userId, date]);
+            
+            db.run(`UPDATE employee_performance SET ${field} = ${field} + ?, last_activity = CURRENT_TIMESTAMP 
+                    WHERE user_id = ? AND date = ?`, 
+                [increment, userId, date], function(err) {
+                if (err) reject(err);
+                else resolve();
+            });
+        });
+    },
+
+    getPerformanceByUser: (userId, date) => {
+        return new Promise((resolve, reject) => {
+            db.get(`SELECT * FROM employee_performance WHERE user_id = ? AND date = ?`, 
+                [userId, date], (err, row) => {
+                if (err) reject(err);
+                else resolve(row);
+            });
+        });
+    },
+
+    getAllPerformance: (date) => {
+        return new Promise((resolve, reject) => {
+            db.all(`SELECT ep.*, u.username 
+                    FROM employee_performance ep 
+                    JOIN users u ON ep.user_id = u.id 
+                    WHERE ep.date = ?`, 
+                [date], (err, rows) => {
+                if (err) reject(err);
+                else resolve(rows);
+            });
+        });
     }
-
-    jwt.verify(token, JWT_SECRET, (err, user) => {
-        if (err) {
-            return res.status(403).json({ error: 'رمز الدخول غير صالح.' });
-        }
-        req.user = user;
-        next();
-    });
 };
 
 // WhatsApp Client
@@ -96,94 +283,22 @@ if (process.env.DEEPSEEK_API_KEY) {
     deepseekAvailable = false;
 }
 
-// Comprehensive Company Information
-const ragmcloudCompanyInfo = {
-    name: "رقم كلاود",
-    englishName: "Ragmcloud ERP",
-    website: "https://ragmcloud.sa",
-    phone: "+966555111222",
-    email: "info@ragmcloud.sa",
-    address: "الرياض - حي المغرزات - طريق الملك عبد الله",
-    workingHours: "من الأحد إلى الخميس - 8 صباحاً إلى 6 مساءً",
-    
-    packages: {
-        basic: {
-            name: "الباقة الأساسية",
-            price: "1000 ريال سنوياً",
-            users: "مستخدم واحد",
-            branches: "فرع واحد",
-            storage: "500 ميجابايت",
-            invoices: "500 فاتورة شهرياً",
-            features: [
-                "إدارة العملاء والفواتير",
-                "إدارة المبيعات والمشتريات",
-                "إدارة المنتجات",
-                "إرسال عروض الأسعار",
-                "إرسال الفواتير عبر البريد",
-                "دعم فني عبر البريد الإلكتروني",
-                "تحديثات النظام الدورية",
-                "تصدير التقارير إلى Excel",
-                "رفع الفواتير الإلكترونية (فاتورة)",
-                "الدعم الفني عبر المحادثة"
-            ],
-            target: "الأفراد والمشاريع الصغيرة جداً"
-        },
-        
-        advanced: {
-            name: "الباقة المتقدمة", 
-            price: "1800 ريال سنوياً",
-            users: "مستخدمين",
-            branches: "فرعين",
-            storage: "1 جيجابايت",
-            invoices: "1000 فاتورة شهرياً",
-            features: [
-                "جميع ميزات الباقة الأساسية",
-                "إدارة المخزون المتكاملة",
-                "تقارير مفصلة (20 تقرير)",
-                "دعم فني عبر الهاتف",
-                "إدارة صلاحيات المستخدمين",
-                "تطبيق الجوال",
-                "الفروع والمستخدمين الفرعيين"
-            ],
-            target: "الشركات الصغيرة والمتوسطة"
-        },
-        
-        professional: {
-            name: "الباقة الاحترافية",
-            price: "2700 ريال سنوياً", 
-            users: "3 مستخدمين",
-            branches: "3 فروع",
-            storage: "2 جيجابايت",
-            invoices: "2000 فاتورة شهرياً",
-            features: [
-                "جميع ميزات الباقة المتقدمة",
-                "تنبيهات ذكية",
-                "الربط مع المتاجر الإلكترونية",
-                "إدارة متعددة الفروع",
-                "ربط النظام بالمحاسب الخارجي",
-                "تخصيص واجهة النظام",
-                "30 تقرير متاح",
-                "تدريب المستخدمين"
-            ],
-            target: "الشركات المتوسطة والكبيرة"
-        },
-        
-        premium: {
-            name: "الباقة المميزة",
-            price: "3000 ريال سنوياً",
-            users: "3 مستخدمين", 
-            branches: "3 فروع",
-            storage: "3 جيجابايت",
-            invoices: "غير محدود",
-            features: [
-                "جميع ميزات الباقة الاحترافية",
-                "استشارات محاسبية مجانية",
-                "فواتير غير محدودة",
-                "دعم متميز"
-            ],
-            target: "الشركات الكبيرة والمؤسسات"
-        }
+// Authentication middleware
+const authenticateToken = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+
+    if (!token) {
+        return res.status(401).json({ error: 'الوصول مرفوض. يرجى تسجيل الدخول.' });
     }
+
+    jwt.verify(token, JWT_SECRET, (err, user) => {
+        if (err) {
+            return res.status(403).json({ error: 'رمز الدخول غير صالح.' });
+        }
+        req.user = user;
+        next();
+    });
 };
 
 // AI System Prompt
@@ -211,19 +326,7 @@ const AI_SYSTEM_PROMPT = `أنت مساعد ذكي ومحترف تمثل شرك�
 2. **إذا سألك عن شيء خارج تخصصك:** قل "أعتذر، هذا السؤال خارج نطاق تخصصي في أنظمة ERP"
 3. **كن مقنعاً:** ركز على فوائد النظام للعميل
 4. **اسأل عن نشاط العميل:** لتعرف أي باقة تناسبه
-5. **شجع على التواصل:** وجه العميل للاتصال بفريق المبيعات
-
-🔹 **نماذج الردود المقنعة:**
-- "نظامنا بيوفر عليك 50% من وقتك اليومي في المتابعة المحاسبية"
-- "بتقدر تتابع كل فروعك من مكان واحد بدون ما تحتاج تروح لكل فرع"
-- "التقارير بتكون جاهزة بشكل فوري علشان تتابع أداء شركتك"
-- "جرب النظام مجاناً لمدة 7 أيام وتشوف الفرق بنفسك"
-
-🔹 **كيفية التعامل مع الأسئلة:**
-- اسأل عن طبيعة نشاط العميل أولاً
-- حدد التحديات التي يواجهها
-- اقترح الباقة المناسبة لاحتياجاته
-- وجهه للاتصال بفريق المبيعات للتسجيل
+5. **شجع على التواصل:** وجه العميل للاتصال بفريق المبيعات للتسجيل
 
 تذكر: أنت بائع محترف هدفك مساعدة العملاء في اختيار النظام المناسب لشركاتهم.`;
 
@@ -292,6 +395,31 @@ function generateEnhancedRagmcloudResponse(userMessage, clientPhone) {
 📞 فريق المبيعات جاهز لمساعدتك: +966555111222`;
     }
     
+    // ERP System questions
+    if (msg.includes('نظام') || msg.includes('erp') || msg.includes('برنامج') || 
+        msg.includes('سوفت وير') || msg.includes('system')) {
+        
+        return `🌟 **نظام رقم كلاود ERP السحابي**
+
+هو حل متكامل لإدارة شركتك بشكل احترافي:
+
+✅ **المميزات الأساسية:**
+• محاسبة متكاملة مع الزكاة والضريبة
+• إدارة مخزون ومستودعات ذكية
+• نظام موارد بشرية ورواتب
+• إدارة علاقات عملاء (CRM)
+• تقارير وتحليلات فورية
+• تكامل مع المنصات الحكومية
+
+🚀 **فوائد للنظام:**
+• توفير 50% من وقت المتابعة اليومية
+• تقليل الأخطاء المحاسبية
+• متابعة كل الفروع من مكان واحد
+• تقارير فورية لاتخاذ القرارات
+
+📞 جرب النظام مجاناً: +966555111222`;
+    }
+    
     // Default response
     return `أهلاً وسهلاً بك! 👋
 
@@ -316,15 +444,10 @@ function generateEnhancedRagmcloudResponse(userMessage, clientPhone) {
 أخبرني عن طبيعة نشاط شركتك علشان أقدر أساعدك في اختيار النظام المناسب!`;
 }
 
-// ENHANCED AI Response
+// AI Response
 async function generateRagmcloudAIResponse(userMessage, clientPhone, userId) {
-    console.log('🔄 Processing message for Ragmcloud with AI...');
-    
-    // ALWAYS try DeepSeek first if available
     if (deepseekAvailable) {
         try {
-            console.log('🎯 Using DeepSeek API...');
-            
             const response = await fetch('https://api.deepseek.com/chat/completions', {
                 method: 'POST',
                 headers: {
@@ -351,27 +474,17 @@ async function generateRagmcloudAIResponse(userMessage, clientPhone, userId) {
                 })
             });
 
-            if (!response.ok) {
-                throw new Error(`DeepSeek API error: ${response.status}`);
+            if (response.ok) {
+                const data = await response.json();
+                if (data.choices && data.choices[0] && data.choices[0].message) {
+                    return data.choices[0].message.content;
+                }
             }
-
-            const data = await response.json();
-            
-            if (data.choices && data.choices[0] && data.choices[0].message) {
-                console.log('✅ DeepSeek Response successful');
-                return data.choices[0].message.content;
-            } else {
-                throw new Error('Invalid response from DeepSeek');
-            }
-
         } catch (error) {
             console.error('❌ DeepSeek API Error:', error.message);
-            console.log('🔄 Falling back to enhanced responses...');
         }
     }
     
-    // If DeepSeek not available, use enhanced fallback
-    console.log('🤖 Using enhanced fallback response');
     return generateEnhancedRagmcloudResponse(userMessage, clientPhone);
 }
 
@@ -393,7 +506,7 @@ function formatPhoneNumber(phone) {
     return cleaned;
 }
 
-// Process incoming messages with auto-reply
+// Process incoming messages
 async function processIncomingMessage(message, from, userId) {
     try {
         console.log(`📩 Processing message from ${from}: ${message}`);
@@ -414,13 +527,7 @@ async function processIncomingMessage(message, from, userId) {
         
         let aiResponse;
         try {
-            // Generate AI response with timeout
-            aiResponse = await Promise.race([
-                generateRagmcloudAIResponse(message, clientPhone, userId),
-                new Promise((_, reject) => 
-                    setTimeout(() => reject(new Error('AI response timeout')), 15000)
-                )
-            ]);
+            aiResponse = await generateRagmcloudAIResponse(message, clientPhone, userId);
         } catch (aiError) {
             console.error('❌ AI response error:', aiError.message);
             aiResponse = generateEnhancedRagmcloudResponse(message, clientPhone);
@@ -447,18 +554,10 @@ async function processIncomingMessage(message, from, userId) {
         
     } catch (error) {
         console.error('❌ Error processing incoming message:', error);
-        
-        // Send professional error message
-        try {
-            const professionalMessage = "عذراً، يبدو أن هناك تأخير في النظام. يرجى المحاولة مرة أخرى أو التواصل معنا مباشرة على +966555111222";
-            await whatsappClient.sendMessage(from, professionalMessage);
-        } catch (sendError) {
-            console.error('❌ Failed to send error message:', sendError);
-        }
     }
 }
 
-// Enhanced Excel file processing
+// Process Excel file
 function processExcelFile(filePath, userId) {
     try {
         const workbook = XLSX.readFile(filePath);
@@ -468,14 +567,11 @@ function processExcelFile(filePath, userId) {
 
         const clients = jsonData.map((row, index) => {
             const name = row['Name'] || row['name'] || row['الاسم'] || row['اسم'] || 
-                         row['اسم العميل'] || row['Client Name'] || row['client_name'] || 
-                         `عميل ${index + 1}`;
+                         row['اسم العميل'] || row['Client Name'] || `عميل ${index + 1}`;
             
             const phone = formatPhoneNumber(
                 row['Phone'] || row['phone'] || row['الهاتف'] || row['هاتف'] || 
-                row['رقم الجوال'] || row['جوال'] || row['Phone Number'] || 
-                row['phone_number'] || row['رقم الهاتف'] || row['mobile'] || 
-                row['Mobile'] || row['الجوال']
+                row['رقم الجوال'] || row['جوال'] || row['Phone Number']
             );
             
             return {
@@ -500,12 +596,11 @@ function processExcelFile(filePath, userId) {
     }
 }
 
-// IMPROVED WhatsApp Client with better reconnection
+// WhatsApp Client Initialization
 function initializeWhatsApp() {
     console.log('🔄 Starting WhatsApp...');
     
     try {
-        // Clean up previous session if exists
         if (whatsappClient) {
             try {
                 whatsappClient.destroy();
@@ -590,7 +685,6 @@ function initializeWhatsApp() {
                 const clientPhone = message.from.replace('@c.us', '');
                 
                 // For now, assign to admin user (userId: 1)
-                // In production, you might want to assign based on round-robin or other logic
                 const assignedUserId = 1;
                 
                 // Save received message
@@ -655,7 +749,7 @@ function initializeWhatsApp() {
     }
 }
 
-// Manual reconnection function
+// Manual reconnection
 function manualReconnectWhatsApp() {
     console.log('🔄 Manual reconnection requested...');
     if (whatsappClient) {
@@ -667,38 +761,11 @@ function manualReconnectWhatsApp() {
     }
 }
 
-// Generate employee performance report
-function generateEmployeePerformanceReport(performanceData, username) {
-    const today = new Date().toISOString().split('T')[0];
-    
-    const report = `
-📊 **تقرير أداء الموظف - ${today}**
-
-👤 **الموظف:** ${username}
-
-🕒 **الإحصاءات العامة:**
-• 📨 الرسائل المرسلة: ${performanceData.messages_sent || 0}
-• 👥 العملاء المتواصل معهم: ${performanceData.clients_contacted || 0}
-• 🤖 الردود الآلية: ${performanceData.ai_replies_sent || 0}
-• 📢 الحملات الجماعية: ${performanceData.bulk_campaigns || 0}
-• 💼 العملاء المهتمين: ${performanceData.interested_clients || 0}
-
-⏰ **نشاط اليوم:**
-• بدء العمل: ${performanceData.start_time ? new Date(performanceData.start_time).toLocaleTimeString('ar-SA') : 'غير محدد'}
-• آخر نشاط: ${performanceData.last_activity ? new Date(performanceData.last_activity).toLocaleTimeString('ar-SA') : 'غير محدد'}
-
-📞 **للمزيد من التفاصيل:** 
-يمكن مراجعة التقارير التفصيلية في النظام
-    `.trim();
-    
-    return report;
-}
-
 // Middleware
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Routes
+// API Routes
 
 // Login route
 app.post('/api/login', async (req, res) => {
@@ -1008,9 +1075,30 @@ app.get('/login', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'login.html'));
 });
 
-// Serve main app
-app.get('/', authenticateToken, (req, res) => {
+// Serve main app - Redirect to login if not authenticated
+app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// Socket.io for real-time communication
+io.on('connection', (socket) => {
+    console.log('Client connected');
+    
+    // Send current status
+    socket.emit('status', { 
+        connected: isConnected, 
+        message: isConnected ? 'واتساب متصل ✅' : 'جارٍ الاتصال...',
+        qrAvailable: !!qrCodeUrl && !isConnected
+    });
+
+    // Send QR code if available
+    if (qrCodeUrl && !isConnected) {
+        socket.emit('qr', qrCodeUrl);
+    }
+
+    socket.on('disconnect', () => {
+        console.log('Client disconnected');
+    });
 });
 
 // Start server
@@ -1019,6 +1107,8 @@ server.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
     console.log(`📱 WhatsApp ERP Bot Started`);
     console.log(`🔗 Access the system at: http://localhost:${PORT}`);
+    console.log(`🔑 Default Admin: IT / @Admin4040`);
+    console.log(`🤖 AI System: ${deepseekAvailable ? 'DeepSeek Ready' : 'Using Fallback'}`);
     
     // Initialize WhatsApp
     setTimeout(() => initializeWhatsApp(), 2000);
