@@ -8,15 +8,12 @@ const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 const XLSX = require('xlsx');
-const jwt = require('jsonwebtoken');
-const Database = require('./database');
 
 // Load environment variables
 require('dotenv').config();
 
 const app = express();
 const server = http.createServer(app);
-const db = new Database();
 
 // CORS configuration for Socket.io
 const io = socketIo(server, {
@@ -26,14 +23,6 @@ const io = socketIo(server, {
     }
 });
 
-// JWT Secret
-const JWT_SECRET = process.env.JWT_SECRET || 'ragmcloud-erp-secret-key-2024';
-
-// Middleware
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-app.use(express.static('public'));
-
 // CORS middleware
 app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
@@ -41,6 +30,9 @@ app.use((req, res, next) => {
     res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
     next();
 });
+
+// Serve static files from public directory
+app.use(express.static(path.join(__dirname, 'public')));
 
 // Create required directories
 const directories = ['uploads', 'memory', 'tmp', 'reports', 'sessions', 'public'];
@@ -66,9 +58,6 @@ let whatsappClient;
 let isConnected = false;
 let qrCodeUrl = '';
 let isBotStopped = false;
-
-// User sessions
-const activeUsers = new Map();
 
 // Employee Performance Tracking
 let employeePerformance = {
@@ -98,6 +87,9 @@ if (process.env.DEEPSEEK_API_KEY) {
     deepseekAvailable = false;
 }
 
+// Imported clients tracking
+let importedClients = new Set();
+
 // Client auto-reply timers to prevent spam
 let clientReplyTimers = new Map();
 
@@ -111,6 +103,7 @@ const ragmcloudCompanyInfo = {
     address: "الرياض - حي المغرزات - طريق الملك عبد الله",
     workingHours: "من الأحد إلى الخميس - 8 صباحاً إلى 6 مساءً",
     
+    // CORRECT PACKAGES from website
     packages: {
         basic: {
             name: "الباقة الأساسية",
@@ -205,10 +198,33 @@ const ragmcloudCompanyInfo = {
             ],
             target: "الشركات الكبيرة والمؤسسات"
         }
-    }
+    },
+
+    // Services
+    services: {
+        accounting: "الحلول المحاسبية المتكاملة",
+        inventory: "إدارة المخزون والمستودعات",
+        hr: "إدارة الموارد البشرية والرواتب",
+        crm: "إدارة علاقات العملاء",
+        sales: "إدارة المبيعات والمشتريات", 
+        reports: "التقارير والتحليلات الذكية",
+        integration: "التكامل مع الأنظمة الحكومية"
+    },
+
+    // System Features
+    features: [
+        "سحابي 100% - لا حاجة لخوادم",
+        "واجهة عربية سهلة الاستخدام", 
+        "دعم فني على مدار الساعة",
+        "تكامل مع الزكاة والضريبة",
+        "تقارير ذكية وقابلة للتخصيص",
+        "نسخ احتياطي تلقائي",
+        "تطبيق جوال متكامل",
+        "أمان عالي وحماية بيانات"
+    ]
 };
 
-// AI System Prompt (FULL TRAINING)
+// AI System Prompt
 const AI_SYSTEM_PROMPT = `أنت مساعد ذكي ومحترف تمثل شركة "رقم كلاود" المتخصصة في أنظمة ERP السحابية. أنت بائع مقنع ومحاسب خبير.
 
 🔹 **هويتك:**
@@ -257,20 +273,23 @@ function shouldSendGreeting(phone) {
             return true; // First message in conversation
         }
         
+        // Find the last message timestamp
         const lastMessage = messages[messages.length - 1];
         const lastMessageTime = new Date(lastMessage.timestamp);
         const currentTime = new Date();
         const hoursDiff = (currentTime - lastMessageTime) / (1000 * 60 * 60);
         
+        // Return true if more than 5 hours passed
         return hoursDiff > 5;
     } catch (error) {
         console.error('Error checking greeting condition:', error);
-        return true;
+        return true; // Default to greeting if error
     }
 }
 
-// Check if we should auto-reply to client
+// FIXED: Check if we should auto-reply to client (REPLY TO ALL CLIENTS)
 function shouldReplyToClient(phone) {
+    // FIX: Remove the imported clients restriction - reply to ALL clients
     return true;
 }
 
@@ -280,7 +299,7 @@ function shouldAutoReplyNow(phone) {
     if (!lastReplyTime) return true;
     
     const timeDiff = Date.now() - lastReplyTime;
-    return timeDiff >= 3000;
+    return timeDiff >= 3000; // 3 seconds minimum between replies
 }
 
 // Update client reply timer
@@ -293,6 +312,7 @@ function autoDetectClientInterest(phone, message) {
     try {
         const msg = message.toLowerCase();
         
+        // Keywords for different interest levels
         const interestedKeywords = ['سعر', 'تكلفة', 'عرض', 'خصم', 'تجربة', 'جرب', 'مميزات', 'تفاصيل', 'متى', 'كيف', 'أرغب', 'أريد', 'شرح', 'شرح', 'تكلم', 'اتصل', 'تواصل'];
         const busyKeywords = ['لاحقاً', 'مشغول', 'بعدين', 'لاحقا', 'الوقت', 'منشغل', 'مشغول', 'شغل', 'دور', 'وظيفة'];
         const notInterestedKeywords = ['لا أريد', 'غير مهتم', 'لا أرغب', 'شكراً', 'لا شكر', 'ما ابغى', 'ما ابي', 'كفاية', 'توقف', 'لا تتصل', 'بلوك'];
@@ -307,7 +327,9 @@ function autoDetectClientInterest(phone, message) {
             newStatus = 'not-interested';
         }
         
+        // Update client status in memory
         updateClientStatus(phone, newStatus);
+        
         return newStatus;
     } catch (error) {
         console.error('Error auto-detecting client interest:', error);
@@ -318,8 +340,29 @@ function autoDetectClientInterest(phone, message) {
 // Update client status in memory
 function updateClientStatus(phone, status) {
     try {
-        db.updateClientStatus(phone, status, null);
-        console.log(`🔄 Auto-updated client ${phone} status to: ${status}`);
+        let clients = [];
+        const clientsFile = './memory/clients.json';
+        
+        if (fs.existsSync(clientsFile)) {
+            const clientsData = fs.readFileSync(clientsFile, 'utf8');
+            clients = JSON.parse(clientsData);
+        }
+
+        const clientIndex = clients.findIndex(client => client.phone === phone);
+        if (clientIndex !== -1) {
+            clients[clientIndex].status = status;
+            clients[clientIndex].statusUpdatedAt = new Date().toISOString();
+            fs.writeFileSync(clientsFile, JSON.stringify(clients, null, 2));
+            
+            // Emit status update to frontend
+            io.emit('client_status_updated', {
+                phone: phone,
+                status: status,
+                clients: clients
+            });
+            
+            console.log(`🔄 Auto-updated client ${phone} status to: ${status}`);
+        }
     } catch (error) {
         console.error('Error updating client status:', error);
     }
@@ -368,7 +411,34 @@ function trackEmployeeActivity(type, data = {}) {
         ...data
     });
     
+    // Check if we should auto-send report to manager (after 30 messages)
+    checkAutoSendReport();
+    
+    // Save performance data
     savePerformanceData();
+}
+
+// Check if we should auto-send report to manager
+function checkAutoSendReport() {
+    const messageCount = employeePerformance.dailyStats.messagesSent;
+    
+    // Auto-send report after every 30 messages
+    if (messageCount > 0 && messageCount % 30 === 0) {
+        console.log(`📊 Auto-sending report to manager after ${messageCount} messages...`);
+        
+        // Send notification to frontend
+        io.emit('auto_report_notification', {
+            messageCount: messageCount,
+            message: `تم إرسال ${messageCount} رسالة. جاري إرسال التقرير التلقائي إلى المدير...`
+        });
+        
+        // Auto-send report
+        setTimeout(() => {
+            sendReportToManager().catch(error => {
+                console.error('❌ Auto-report failed:', error);
+            });
+        }, 3000);
+    }
 }
 
 // Save performance data to file
@@ -394,6 +464,7 @@ function loadPerformanceData() {
                 clientInteractions: new Map(data.clientInteractions || [])
             };
             
+            // Check if it's a new day
             const today = new Date().toISOString().split('T')[0];
             if (employeePerformance.dailyStats.date !== today) {
                 resetDailyStats();
@@ -422,12 +493,105 @@ function resetDailyStats() {
     savePerformanceData();
 }
 
-// Get conversation history for AI context
+// Generate comprehensive employee performance report
+function generateEmployeePerformanceReport() {
+    const stats = employeePerformance.dailyStats;
+    const totalInteractions = stats.messagesSent + stats.aiRepliesSent;
+    const interestRate = stats.clientsContacted > 0 ? (stats.interestedClients / stats.clientsContacted * 100).toFixed(1) : 0;
+    
+    // Calculate performance score (0-100)
+    let performanceScore = 0;
+    performanceScore += Math.min(stats.messagesSent * 2, 30); // Max 30 points for messages
+    performanceScore += Math.min(stats.clientsContacted * 5, 30); // Max 30 points for clients
+    performanceScore += Math.min(stats.interestedClients * 10, 40); // Max 40 points for interested clients
+    
+    // Performance evaluation
+    let performanceLevel = 'ضعيف';
+    let improvementSuggestions = [];
+    
+    if (performanceScore >= 80) {
+        performanceLevel = 'ممتاز';
+    } else if (performanceScore >= 60) {
+        performanceLevel = 'جيد جداً';
+    } else if (performanceScore >= 40) {
+        performanceLevel = 'جيد';
+    } else if (performanceScore >= 20) {
+        performanceLevel = 'مقبول';
+    }
+    
+    // Generate improvement suggestions
+    if (stats.messagesSent < 10) {
+        improvementSuggestions.push('• زيادة عدد الرسائل المرسلة');
+    }
+    if (stats.clientsContacted < 5) {
+        improvementSuggestions.push('• التواصل مع المزيد من العملاء');
+    }
+    if (stats.interestedClients < 2) {
+        improvementSuggestions.push('• تحسين جودة المحادثات لجذب عملاء مهتمين');
+    }
+    if (stats.aiRepliesSent < stats.messagesSent * 0.3) {
+        improvementSuggestions.push('• الاستفادة أكثر من الذكاء الاصطناعي في الردود');
+    }
+    
+    if (improvementSuggestions.length === 0) {
+        improvementSuggestions.push('• الاستمرار في الأداء المتميز');
+    }
+    
+    const report = `
+📊 **تقرير أداء الموظف - ${stats.date}**
+
+🕒 **الإحصاءات العامة:**
+• 📨 الرسائل المرسلة: ${stats.messagesSent}
+• 👥 العملاء المتواصل معهم: ${stats.clientsContacted}
+• 🤖 الردود الآلية: ${stats.aiRepliesSent}
+• 📢 الحملات الجماعية: ${stats.bulkCampaigns}
+• 💼 العملاء المهتمين: ${stats.interestedClients}
+• 📈 معدل الاهتمام: ${interestRate}%
+
+🎯 **التقييم:**
+• النقاط: ${performanceScore}/100
+• المستوى: ${performanceLevel}
+
+📋 **ملخص الأداء:**
+${performanceScore >= 80 ? '✅ أداء متميز في التواصل مع العملاء' : 
+  performanceScore >= 60 ? '☑️ أداء جيد يحتاج لتحسين بسيط' :
+  performanceScore >= 40 ? '📝 أداء مقبول يحتاج لتطوير' :
+  '⚠️ يحتاج تحسين في الأداء'}
+
+💡 **اقتراحات للتحسين:**
+${improvementSuggestions.join('\n')}
+
+⏰ **نشاط اليوم:**
+• بدء العمل: ${new Date(stats.startTime).toLocaleTimeString('ar-SA')}
+• آخر نشاط: ${new Date(stats.lastActivity).toLocaleTimeString('ar-SA')}
+• المدة النشطة: ${calculateActiveHours(stats.startTime, stats.lastActivity)}
+
+📞 **للمزيد من التفاصيل:** 
+يمكن مراجعة التقارير التفصيلية في النظام
+    `.trim();
+    
+    return report;
+}
+
+// Calculate active hours
+function calculateActiveHours(startTime, endTime) {
+    const start = new Date(startTime);
+    const end = new Date(endTime);
+    const diffMs = end - start;
+    const hours = Math.floor(diffMs / (1000 * 60 * 60));
+    const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+    return `${hours} ساعة ${minutes} دقيقة`;
+}
+
+// ENHANCED: Get conversation history for AI context
 function getConversationHistoryForAI(phone, maxMessages = 10) {
     try {
         const messages = getClientMessages(phone);
+        
+        // Get recent messages (last 10 messages for context)
         const recentMessages = messages.slice(-maxMessages);
         
+        // Format conversation history for AI
         const conversationHistory = recentMessages.map(msg => {
             const role = msg.fromMe ? 'assistant' : 'user';
             return {
@@ -444,7 +608,7 @@ function getConversationHistoryForAI(phone, maxMessages = 10) {
     }
 }
 
-// DeepSeek AI API Call with Conversation Memory
+// ENHANCED: DeepSeek AI API Call with Conversation Memory
 async function callDeepSeekAI(userMessage, clientPhone) {
     if (!deepseekAvailable || !process.env.DEEPSEEK_API_KEY) {
         throw new Error('DeepSeek not available');
@@ -456,6 +620,7 @@ async function callDeepSeekAI(userMessage, clientPhone) {
         const shouldGreet = shouldSendGreeting(clientPhone);
         const conversationHistory = getConversationHistoryForAI(clientPhone);
         
+        // Build messages array
         const messages = [
             {
                 role: "system",
@@ -463,10 +628,12 @@ async function callDeepSeekAI(userMessage, clientPhone) {
             }
         ];
 
+        // Add conversation history
         if (conversationHistory.length > 0) {
             messages.push(...conversationHistory);
         }
 
+        // Add current user message with context
         messages.push({
             role: "user", 
             content: `العميل يقول: "${userMessage}"
@@ -516,6 +683,7 @@ function generateEnhancedRagmcloudResponse(userMessage, clientPhone) {
     
     console.log('🤖 Using enhanced Ragmcloud response for:', msg);
     
+    // Check for personal/irrelevant questions - REJECT THEM
     const irrelevantQuestions = [
         'من أنت', 'ما اسمك', 'who are you', 'what is your name',
         'مدير', 'المدير', 'manager', 'owner', 'صاحب',
@@ -528,6 +696,7 @@ function generateEnhancedRagmcloudResponse(userMessage, clientPhone) {
         return "أعتذر، هذا السؤال خارج نطاق تخصصي في أنظمة ERP. يمكنني مساعدتك في اختيار النظام المناسب لشركتك أو الإجابة على استفساراتك حول باقاتنا وخدماتنا.";
     }
     
+    // Greeting only at start or after 5 hours
     if (shouldGreet && (msg.includes('السلام') || msg.includes('سلام') || msg.includes('اهلا') || 
         msg.includes('مرحبا') || msg.includes('اهلين') || msg.includes('مساء') || 
         msg.includes('صباح') || msg.includes('hello') || msg.includes('hi'))) {
@@ -546,6 +715,7 @@ function generateEnhancedRagmcloudResponse(userMessage, clientPhone) {
 كيف يمكنني مساعدتك اليوم؟`;
     }
     
+    // Price/Packages questions
     if (msg.includes('سعر') || msg.includes('تكلفة') || msg.includes('باقة') || 
         msg.includes('package') || msg.includes('price') || msg.includes('كم') || 
         msg.includes('كام') || msg.includes('تعرفة')) {
@@ -574,6 +744,7 @@ function generateEnhancedRagmcloudResponse(userMessage, clientPhone) {
 📞 فريق المبيعات جاهز لمساعدتك: +966555111222`;
     }
     
+    // ERP System questions
     if (msg.includes('نظام') || msg.includes('erp') || msg.includes('برنامج') || 
         msg.includes('سوفت وير') || msg.includes('system')) {
         
@@ -604,6 +775,7 @@ function generateEnhancedRagmcloudResponse(userMessage, clientPhone) {
 📞 جرب النظام مجاناً: +966555111222`;
     }
     
+    // Accounting questions
     if (msg.includes('محاسبة') || msg.includes('محاسب') || msg.includes('حسابات') || 
         msg.includes('مالي') || msg.includes('accounting')) {
         
@@ -631,6 +803,7 @@ function generateEnhancedRagmcloudResponse(userMessage, clientPhone) {
 📞 استشارة محاسبية مجانية: +966555111222`;
     }
     
+    // Inventory questions  
     if (msg.includes('مخزون') || msg.includes('مستودع') || msg.includes('بضاعة') || 
         msg.includes('inventory') || msg.includes('stock')) {
         
@@ -657,6 +830,7 @@ function generateEnhancedRagmcloudResponse(userMessage, clientPhone) {
 📞 للاستشارة: +966555111222`;
     }
     
+    // Trial/Demo requests
     if (msg.includes('تجريب') || msg.includes('تجربة') || msg.includes('demo') || 
         msg.includes('جرب') || msg.includes('نسخة')) {
         
@@ -681,6 +855,7 @@ function generateEnhancedRagmcloudResponse(userMessage, clientPhone) {
 جرب وشوف الفرق في إدارة شركتك!`;
     }
     
+    // Contact requests
     if (msg.includes('اتصل') || msg.includes('تواصل') || msg.includes('رقم') || 
         msg.includes('هاتف') || msg.includes('contact')) {
         
@@ -704,6 +879,7 @@ function generateEnhancedRagmcloudResponse(userMessage, clientPhone) {
 فريق المبيعات جاهز لاستقبال استفساراتك وتقديم الاستشارة المجانية!`;
     }
     
+    // Default response - CONVINCING SALES APPROACH
     return `أهلاً وسهلاً بك! 👋
 
 أنت تتحدث مع مساعد رقم كلاود المتخصص في أنظمة ERP السحابية.
@@ -727,10 +903,11 @@ function generateEnhancedRagmcloudResponse(userMessage, clientPhone) {
 أخبرني عن طبيعة نشاط شركتك علشان أقدر أساعدك في اختيار النظام المناسب!`;
 }
 
-// AI Response - ALWAYS TRY DEEPSEEK FIRST
+// ENHANCED AI Response - ALWAYS TRY DEEPSEEK FIRST
 async function generateRagmcloudAIResponse(userMessage, clientPhone) {
     console.log('🔄 Processing message for Ragmcloud with memory:', userMessage);
     
+    // ALWAYS try DeepSeek first if available
     if (deepseekAvailable) {
         try {
             console.log('🎯 Using DeepSeek with conversation memory...');
@@ -748,11 +925,12 @@ async function generateRagmcloudAIResponse(userMessage, clientPhone) {
         }
     }
     
+    // If DeepSeek not available, use enhanced fallback
     console.log('🤖 DeepSeek not available, using enhanced fallback');
     return generateEnhancedRagmcloudResponse(userMessage, clientPhone);
 }
 
-// Store messages per client with better reliability
+// ENHANCED: Store messages per client with better reliability
 function storeClientMessage(phone, message, isFromMe) {
     try {
         const messageData = {
@@ -764,6 +942,7 @@ function storeClientMessage(phone, message, isFromMe) {
         let clientMessages = [];
         const messageFile = `./memory/messages_${phone}.json`;
         
+        // Ensure memory directory exists
         if (!fs.existsSync('./memory')) {
             fs.mkdirSync('./memory', { recursive: true });
         }
@@ -780,6 +959,7 @@ function storeClientMessage(phone, message, isFromMe) {
 
         clientMessages.push(messageData);
         
+        // Keep only last 50 messages to prevent file bloat
         if (clientMessages.length > 50) {
             clientMessages = clientMessages.slice(-50);
         }
@@ -793,7 +973,7 @@ function storeClientMessage(phone, message, isFromMe) {
     }
 }
 
-// Get client messages with error handling
+// ENHANCED: Get client messages with error handling
 function getClientMessages(phone) {
     try {
         const messageFile = `./memory/messages_${phone}.json`;
@@ -809,26 +989,32 @@ function getClientMessages(phone) {
     return [];
 }
 
-// Process incoming messages with immediate auto-reply
+// FIXED: Process incoming messages with immediate auto-reply
 async function processIncomingMessage(message, from) {
     try {
         console.log(`📩 Processing message from ${from}: ${message}`);
         
         const clientPhone = from.replace('@c.us', '');
         
+        // Store the incoming message
         storeClientMessage(clientPhone, message, false);
+        
+        // Auto-detect client interest
         autoDetectClientInterest(clientPhone, message);
         
+        // Check if bot is stopped
         if (isBotStopped) {
             console.log('🤖 Bot is stopped - no auto-reply');
             return;
         }
         
+        // FIXED: Check if we should reply to this client (NOW REPLIES TO ALL CLIENTS)
         if (!shouldReplyToClient(clientPhone)) {
             console.log('⏸️ Client not in imported list - skipping auto-reply');
             return;
         }
         
+        // Check if we should auto-reply now (3-second delay)
         if (!shouldAutoReplyNow(clientPhone)) {
             console.log('⏰ Waiting for 3-second delay before next reply');
             return;
@@ -838,6 +1024,7 @@ async function processIncomingMessage(message, from) {
         
         let aiResponse;
         try {
+            // Generate AI response with timeout
             aiResponse = await Promise.race([
                 generateRagmcloudAIResponse(message, clientPhone),
                 new Promise((_, reject) => 
@@ -846,14 +1033,26 @@ async function processIncomingMessage(message, from) {
             ]);
         } catch (aiError) {
             console.error('❌ AI response error:', aiError.message);
+            // Use enhanced fallback response instead of error message
             aiResponse = generateEnhancedRagmcloudResponse(message, clientPhone);
         }
         
+        // Send the response
         await whatsappClient.sendMessage(from, aiResponse);
+        
+        // Store the sent message
         storeClientMessage(clientPhone, aiResponse, true);
+        
+        // Update reply timer
         updateReplyTimer(clientPhone);
+        
+        // Track AI reply
         trackEmployeeActivity('ai_reply', { clientPhone: clientPhone });
         
+        // Update client last message
+        updateClientLastMessage(clientPhone, aiResponse);
+        
+        // Emit to frontend
         io.emit('message', {
             from: clientPhone,
             message: aiResponse,
@@ -866,6 +1065,7 @@ async function processIncomingMessage(message, from) {
     } catch (error) {
         console.error('❌ Error processing incoming message:', error);
         
+        // Send professional error message instead of technical one
         try {
             const professionalMessage = "عذراً، يبدو أن هناك تأخير في النظام. يرجى المحاولة مرة أخرى أو التواصل معنا مباشرة على +966555111222";
             await whatsappClient.sendMessage(from, professionalMessage);
@@ -902,6 +1102,7 @@ function processExcelFile(filePath) {
         const jsonData = XLSX.utils.sheet_to_json(worksheet);
 
         const clients = jsonData.map((row, index) => {
+            // Try multiple possible column names for name and phone
             const name = row['Name'] || row['name'] || row['الاسم'] || row['اسم'] || 
                          row['اسم العميل'] || row['Client Name'] || row['client_name'] || 
                          `عميل ${index + 1}`;
@@ -924,10 +1125,17 @@ function processExcelFile(filePath) {
                 status: 'no-reply'
             };
         }).filter(client => {
+            // Filter only valid phone numbers
             return client.phone && client.phone.length >= 10;
         });
 
         console.log('✅ Processed clients:', clients.length);
+        
+        // Add to imported clients set for auto-reply filtering
+        clients.forEach(client => {
+            importedClients.add(client.phone);
+        });
+
         return clients;
     } catch (error) {
         console.error('❌ Error processing Excel file:', error);
@@ -940,6 +1148,7 @@ function initializeWhatsApp() {
     console.log('🔄 Starting WhatsApp...');
     
     try {
+        // Clean up previous session if exists
         if (whatsappClient) {
             try {
                 whatsappClient.destroy();
@@ -967,11 +1176,12 @@ function initializeWhatsApp() {
             }
         });
 
-        // QR Code Generation
+        // QR Code Generation - FIXED FOR WEB DISPLAY
         whatsappClient.on('qr', (qr) => {
             console.log('📱 QR CODE RECEIVED');
             qrcode.generate(qr, { small: true });
             
+            // Generate QR code for web interface - FIXED WITH ERROR HANDLING
             QRCode.toDataURL(qr, { 
                 width: 300,
                 height: 300,
@@ -983,6 +1193,7 @@ function initializeWhatsApp() {
             }, (err, url) => {
                 if (err) {
                     console.error('❌ Error generating QR code for web:', err);
+                    // Fallback: create a simple data URL with error message
                     qrCodeUrl = 'data:image/svg+xml;base64,' + Buffer.from(`
                         <svg width="300" height="300" xmlns="http://www.w3.org/2000/svg">
                             <rect width="100%" height="100%" fill="white"/>
@@ -996,6 +1207,7 @@ function initializeWhatsApp() {
                     console.log('✅ QR code generated successfully for web');
                 }
                 
+                // Emit QR code to all connected clients
                 io.emit('qr', qrCodeUrl);
                 io.emit('status', { 
                     connected: false, 
@@ -1009,17 +1221,18 @@ function initializeWhatsApp() {
         whatsappClient.on('ready', () => {
             console.log('✅ WhatsApp READY!');
             isConnected = true;
-            qrCodeUrl = '';
+            qrCodeUrl = ''; // Clear QR code when connected
             io.emit('status', { 
                 connected: true, 
                 message: 'واتساب متصل ✅',
                 qrAvailable: false 
             });
-            io.emit('qr', '');
+            io.emit('qr', ''); // Clear QR code from frontend
         });
 
-        // Message Event with Auto-Reply
+        // FIXED: Message Event with IMMEDIATE Auto-Reply
         whatsappClient.on('message', async (message) => {
+            // Ignore status broadcasts and messages from us
             if (message.from === 'status@broadcast' || message.fromMe) {
                 return;
             }
@@ -1028,22 +1241,25 @@ function initializeWhatsApp() {
             console.log('💬 Message content:', message.body);
             
             try {
+                // Store incoming message immediately
                 const clientPhone = message.from.replace('@c.us', '');
                 storeClientMessage(clientPhone, message.body, false);
                 
+                // Emit to frontend
                 io.emit('message', {
                     from: clientPhone,
                     message: message.body,
                     timestamp: new Date(),
-                    fromMe: false,
-                    clientName: `عميل ${clientPhone}`
+                    fromMe: false
                 });
 
-                if (!isBotStopped) {
-                    processIncomingMessage(message.body, message.from).catch(error => {
-                        console.error('❌ Error in processIncomingMessage:', error);
-                    });
-                }
+                // Update client last message
+                updateClientLastMessage(clientPhone, message.body);
+
+                // Process incoming message with auto-reply (non-blocking)
+                processIncomingMessage(message.body, message.from).catch(error => {
+                    console.error('❌ Error in processIncomingMessage:', error);
+                });
                 
             } catch (error) {
                 console.error('❌ Error handling message:', error);
@@ -1071,14 +1287,17 @@ function initializeWhatsApp() {
                 qrAvailable: false 
             });
             
+            // Auto-reconnect after 5 seconds
             setTimeout(() => {
                 console.log('🔄 Attempting reconnection...');
                 initializeWhatsApp();
             }, 5000);
         });
 
+        // Start initialization
         whatsappClient.initialize().catch(error => {
             console.log('⚠️ WhatsApp init failed:', error.message);
+            // Retry after 10 seconds
             setTimeout(() => initializeWhatsApp(), 10000);
         });
         
@@ -1088,163 +1307,264 @@ function initializeWhatsApp() {
     }
 }
 
-// Authentication middleware
-const authenticateToken = (req, res, next) => {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
+// Update client last message
+function updateClientLastMessage(phone, message) {
+    try {
+        let clients = [];
+        const clientsFile = './memory/clients.json';
+        
+        if (fs.existsSync(clientsFile)) {
+            const clientsData = fs.readFileSync(clientsFile, 'utf8');
+            clients = JSON.parse(clientsData);
+        }
 
-    if (!token) {
-        return res.status(401).json({ error: 'Access token required' });
+        const clientIndex = clients.findIndex(client => client.phone === phone);
+        if (clientIndex !== -1) {
+            clients[clientIndex].lastMessage = message.substring(0, 50) + (message.length > 50 ? '...' : '');
+            clients[clientIndex].lastActivity = new Date().toISOString();
+            fs.writeFileSync(clientsFile, JSON.stringify(clients, null, 2));
+            io.emit('clients_updated', clients);
+        }
+    } catch (error) {
+        console.error('Error updating client last message:', error);
+    }
+}
+
+// Manual reconnection function
+function manualReconnectWhatsApp() {
+    console.log('🔄 Manual reconnection requested...');
+    if (whatsappClient) {
+        whatsappClient.destroy().then(() => {
+            setTimeout(() => initializeWhatsApp(), 2000);
+        });
+    } else {
+        initializeWhatsApp();
+    }
+}
+
+// Send report to manager
+async function sendReportToManager() {
+    if (!isConnected) {
+        throw new Error('واتساب غير متصل');
     }
 
-    jwt.verify(token, JWT_SECRET, (err, user) => {
-        if (err) {
-            return res.status(403).json({ error: 'Invalid or expired token' });
+    try {
+        const report = generateEmployeePerformanceReport();
+        const managerPhone = '966531304279@c.us';
+        
+        console.log('📤 Sending report to manager:', managerPhone);
+        
+        await whatsappClient.sendMessage(managerPhone, report);
+        
+        console.log('✅ Report sent to manager successfully');
+        return true;
+    } catch (error) {
+        console.error('❌ Error sending report to manager:', error);
+        throw error;
+    }
+}
+
+// Export report to file
+function exportReportToFile() {
+    try {
+        const report = generateEmployeePerformanceReport();
+        const fileName = `employee_report_${employeePerformance.dailyStats.date}_${Date.now()}.txt`;
+        const filePath = path.join(__dirname, 'reports', fileName);
+        
+        // Ensure reports directory exists
+        if (!fs.existsSync(path.join(__dirname, 'reports'))) {
+            fs.mkdirSync(path.join(__dirname, 'reports'), { recursive: true });
         }
-        req.user = user;
-        next();
-    });
-};
+        
+        fs.writeFileSync(filePath, report, 'utf8');
+        console.log('✅ Report exported to file successfully');
+        
+        return {
+            success: true,
+            fileName: fileName,
+            filePath: filePath,
+            report: report
+        };
+    } catch (error) {
+        console.error('❌ Error exporting report:', error);
+        throw error;
+    }
+}
+
+// Middleware
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(express.static('public'));
 
 // Routes
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
 
-// Login endpoint
-app.post('/api/login', async (req, res) => {
+// NEW: QR Code status endpoint
+app.get('/api/qr-status', (req, res) => {
+    res.json({
+        connected: isConnected,
+        qrAvailable: !!qrCodeUrl && !isConnected,
+        qrCode: qrCodeUrl
+    });
+});
+
+// Upload Excel file
+app.post('/api/upload-excel', upload.single('excelFile'), (req, res) => {
     try {
-        const { username, password } = req.body;
-        
-        if (!username || !password) {
-            return res.status(400).json({ error: 'اسم المستخدم وكلمة المرور مطلوبان' });
+        if (!req.file) {
+            return res.status(400).json({ error: 'لم يتم رفع أي ملف' });
         }
 
-        const user = await db.authenticateUser(username, password);
+        console.log('📂 Processing uploaded file:', req.file.originalname);
         
-        if (user) {
-            const token = jwt.sign(
-                { id: user.id, username: user.username, role: user.role },
-                JWT_SECRET,
-                { expiresIn: '24h' }
-            );
+        const clients = processExcelFile(req.file.path);
 
-            res.json({
-                success: true,
-                token,
-                user: {
-                    id: user.id,
-                    username: user.username,
-                    role: user.role
-                },
-                message: 'تم تسجيل الدخول بنجاح'
+        if (clients.length === 0) {
+            fs.unlinkSync(req.file.path);
+            return res.status(400).json({ 
+                error: 'لم يتم العثور على بيانات صالحة في الملف' 
             });
+        }
+
+        // Save clients to file
+        fs.writeFileSync('./memory/clients.json', JSON.stringify(clients, null, 2));
+        fs.unlinkSync(req.file.path); // Clean up uploaded file
+
+        // Emit to all connected clients
+        io.emit('clients_updated', clients);
+
+        res.json({ 
+            success: true, 
+            clients: clients, 
+            count: clients.length,
+            message: `تم معالجة ${clients.length} عميل بنجاح`
+        });
+
+    } catch (error) {
+        console.error('❌ Error processing Excel:', error);
+        
+        // Clean up uploaded file
+        if (req.file && fs.existsSync(req.file.path)) {
+            fs.unlinkSync(req.file.path);
+        }
+        
+        res.status(500).json({ 
+            error: 'فشل معالجة ملف Excel: ' + error.message 
+        });
+    }
+});
+
+// Get clients list
+app.get('/api/clients', (req, res) => {
+    try {
+        if (fs.existsSync('./memory/clients.json')) {
+            const clientsData = fs.readFileSync('./memory/clients.json', 'utf8');
+            const clients = JSON.parse(clientsData);
+            res.json({ success: true, clients: clients });
         } else {
-            res.status(401).json({ 
-                success: false, 
-                error: 'اسم المستخدم أو كلمة المرور غير صحيحة' 
-            });
+            res.json({ success: true, clients: [] });
         }
     } catch (error) {
-        console.error('Login error:', error);
-        res.status(500).json({ error: 'خطأ في الخادم' });
+        res.json({ success: true, clients: [] });
     }
 });
 
-// Create user (admin only)
-app.post('/api/users', authenticateToken, async (req, res) => {
+// Get client messages
+app.get('/api/client-messages/:phone', (req, res) => {
     try {
-        if (req.user.role !== 'admin') {
-            return res.status(403).json({ error: 'غير مصرح لك بإنشاء مستخدمين' });
-        }
-
-        const { username, password, role } = req.body;
-        
-        if (!username || !password) {
-            return res.status(400).json({ error: 'اسم المستخدم وكلمة المرور مطلوبان' });
-        }
-
-        const newUser = await db.createUser(username, password, role || 'user');
-        
-        res.json({
-            success: true,
-            user: newUser,
-            message: 'تم إنشاء المستخدم بنجاح'
-        });
+        const phone = req.params.phone;
+        const messages = getClientMessages(phone);
+        res.json({ success: true, messages: messages });
     } catch (error) {
-        console.error('Create user error:', error);
-        res.status(500).json({ error: 'فشل إنشاء المستخدم' });
+        res.json({ success: true, messages: [] });
     }
 });
 
-// Get all users (admin only)
-app.get('/api/users', authenticateToken, async (req, res) => {
+// Get employee performance data
+app.get('/api/employee-performance', (req, res) => {
     try {
-        if (req.user.role !== 'admin') {
-            return res.status(403).json({ error: 'غير مصرح لك بمشاهدة المستخدمين' });
-        }
-
-        const users = await db.getAllUsers();
-        res.json({ success: true, users });
+        const performanceData = {
+            ...employeePerformance,
+            clientInteractions: Array.from(employeePerformance.clientInteractions.entries()),
+            report: generateEmployeePerformanceReport()
+        };
+        res.json({ success: true, performance: performanceData });
     } catch (error) {
-        console.error('Get users error:', error);
-        res.status(500).json({ error: 'فشل جلب بيانات المستخدمين' });
+        res.status(500).json({ success: false, error: error.message });
     }
 });
 
-// Get user conversations
-app.get('/api/conversations/:clientPhone', authenticateToken, async (req, res) => {
+// Toggle bot status
+app.post('/api/toggle-bot', (req, res) => {
     try {
-        const { clientPhone } = req.params;
-        const userId = req.user.role === 'admin' ? 'admin' : req.user.id;
+        const { stop } = req.body;
+        isBotStopped = stop;
         
-        const messages = await db.getConversationHistory(userId, clientPhone);
+        console.log(`🤖 Bot ${isBotStopped ? 'stopped' : 'started'}`);
+        
+        // Emit bot status to all connected clients
+        io.emit('bot_status', { stopped: isBotStopped });
         
         res.json({ 
             success: true, 
-            messages: messages.map(msg => ({
-                message: msg.message_text,
-                fromMe: msg.is_from_me === 1,
-                timestamp: msg.created_at,
-                user: msg.user_id
-            }))
+            stopped: isBotStopped,
+            message: `تم ${isBotStopped ? 'إيقاف' : 'تشغيل'} البوت بنجاح`
         });
     } catch (error) {
-        console.error('Get conversations error:', error);
-        res.status(500).json({ error: 'فشل جبل المحادثة' });
+        res.status(500).json({ success: false, error: error.message });
     }
 });
 
-// Send individual message
-app.post('/api/send-message', authenticateToken, async (req, res) => {
+// Send report to manager
+app.post('/api/send-to-manager', async (req, res) => {
     try {
-        const { phone, message } = req.body;
-        
-        if (!isConnected) {
-            return res.status(400).json({ error: 'واتساب غير متصل' });
-        }
-
-        if (!phone || !message) {
-            return res.status(400).json({ error: 'رقم الهاتف والرسالة مطلوبان' });
-        }
-
-        const formattedPhone = phone.includes('@c.us') ? phone : phone + '@c.us';
-        
-        await whatsappClient.sendMessage(formattedPhone, message);
-        
-        await db.saveMessage(req.user.id, phone, message, true);
-        
+        console.log('🔄 Sending report to manager...');
+        await sendReportToManager();
         res.json({ 
             success: true, 
-            message: 'تم إرسال الرسالة بنجاح'
+            message: 'تم إرسال التقرير إلى المدير بنجاح'
         });
     } catch (error) {
-        console.error('Error sending message:', error);
-        res.status(500).json({ error: 'فشل إرسال الرسالة: ' + error.message });
+        console.error('❌ Error sending report to manager:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: 'فشل إرسال التقرير: ' + error.message 
+        });
     }
 });
 
-// Bulk send endpoint - FIXED
-app.post('/api/send-bulk', authenticateToken, async (req, res) => {
+// Export report
+app.get('/api/export-report', (req, res) => {
     try {
-        const { message, clients } = req.body;
+        console.log('🔄 Exporting report...');
+        const result = exportReportToFile();
+        
+        // Send the file for download
+        res.download(result.filePath, result.fileName, (err) => {
+            if (err) {
+                console.error('Error downloading file:', err);
+                res.status(500).json({ 
+                    success: false, 
+                    error: 'فشل تحميل التقرير' 
+                });
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Error exporting report:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: 'فشل تصدير التقرير: ' + error.message 
+        });
+    }
+});
+
+// Bulk send endpoint
+app.post('/api/send-bulk', async (req, res) => {
+    try {
+        const { message, delay = 40, clients } = req.body;
         
         console.log('📤 Bulk send request received for', clients?.length, 'clients');
 
@@ -1264,45 +1584,85 @@ app.post('/api/send-bulk', authenticateToken, async (req, res) => {
 
         let successCount = 0;
         let failCount = 0;
-        const results = [];
+        
+        // Track bulk campaign
+        trackEmployeeActivity('bulk_campaign', { 
+            clientCount: clients.length,
+            message: message.substring(0, 50) 
+        });
+        
+        io.emit('bulk_progress', {
+            type: 'start',
+            total: clients.length,
+            message: `بدأ الإرسال إلى ${clients.length} عميل`
+        });
 
         for (let i = 0; i < clients.length; i++) {
             const client = clients[i];
             
             if (!client.phone || client.phone.length < 10) {
                 failCount++;
-                results.push({ phone: client.phone, success: false, error: 'رقم هاتف غير صالح' });
                 continue;
             }
 
+            const formattedPhone = formatPhoneNumber(client.phone);
+            const phoneNumber = formattedPhone + '@c.us';
+            
             try {
-                const formattedPhone = client.phone.includes('@c.us') ? client.phone : client.phone + '@c.us';
-                await whatsappClient.sendMessage(formattedPhone, message);
+                // Wait between messages (except first one)
+                if (i > 0) {
+                    await new Promise(resolve => setTimeout(resolve, delay * 1000));
+                }
+                
+                await whatsappClient.sendMessage(phoneNumber, message);
                 
                 successCount++;
-                results.push({ phone: client.phone, success: true });
                 
-                await db.saveMessage(req.user.id, client.phone, message, true);
+                client.lastMessage = message.substring(0, 50) + (message.length > 50 ? '...' : '');
+                client.lastSent = new Date().toISOString();
                 
-                console.log(`✅ Sent to ${client.phone} (${i + 1}/${clients.length})`);
+                // Track message sent
+                trackEmployeeActivity('message_sent', { 
+                    clientPhone: formattedPhone,
+                    clientName: client.name,
+                    message: message.substring(0, 30) 
+                });
+                
+                io.emit('bulk_progress', {
+                    success: true,
+                    client: client.name,
+                    clientPhone: client.phone,
+                    message: message.substring(0, 30) + '...',
+                    current: i + 1,
+                    total: clients.length
+                });
+
+                storeClientMessage(client.phone, message, true);
+                
+                console.log(`✅ Sent to ${client.name}: ${client.phone} (${i + 1}/${clients.length})`);
                 
             } catch (error) {
                 failCount++;
-                results.push({ phone: client.phone, success: false, error: error.message });
-                console.error(`❌ Failed to send to ${client.phone}:`, error.message);
-            }
-
-            // Delay between messages (3 seconds)
-            if (i < clients.length - 1) {
-                await new Promise(resolve => setTimeout(resolve, 3000));
+                
+                io.emit('bulk_progress', {
+                    success: false,
+                    client: client.name,
+                    clientPhone: client.phone,
+                    error: error.message,
+                    current: i + 1,
+                    total: clients.length
+                });
+                
+                console.error(`❌ Failed to send to ${client.name}:`, error.message);
             }
         }
 
         res.json({ 
             success: true, 
-            message: `تم إرسال ${successCount} رسالة بنجاح وفشل ${failCount}`,
-            results 
+            message: `تم إرسال ${successCount} رسالة بنجاح وفشل ${failCount}`
         });
+
+        console.log(`🎉 Bulk send completed: ${successCount} successful, ${failCount} failed`);
 
     } catch (error) {
         console.error('❌ Error in bulk send:', error);
@@ -1313,166 +1673,171 @@ app.post('/api/send-bulk', authenticateToken, async (req, res) => {
     }
 });
 
-// Upload Excel file
-app.post('/api/upload-excel', authenticateToken, upload.single('excelFile'), (req, res) => {
+// Send individual message
+app.post('/api/send-message', async (req, res) => {
     try {
-        if (!req.file) {
-            return res.status(400).json({ error: 'لم يتم رفع أي ملف' });
-        }
-
-        console.log('📂 Processing uploaded file:', req.file.originalname);
+        const { phone, message } = req.body;
         
-        const clients = processExcelFile(req.file.path);
-
-        if (clients.length === 0) {
-            fs.unlinkSync(req.file.path);
-            return res.status(400).json({ 
-                error: 'لم يتم العثور على بيانات صالحة في الملف' 
-            });
+        if (!isConnected) {
+            return res.status(400).json({ error: 'واتساب غير متصل' });
         }
 
-        fs.unlinkSync(req.file.path);
+        if (!phone || !message) {
+            return res.status(400).json({ error: 'رقم الهاتف والرسالة مطلوبان' });
+        }
 
+        const formattedPhone = formatPhoneNumber(phone);
+        const phoneNumber = formattedPhone + '@c.us';
+        
+        await whatsappClient.sendMessage(phoneNumber, message);
+        
+        // Track individual message
+        trackEmployeeActivity('message_sent', { 
+            clientPhone: formattedPhone,
+            message: message.substring(0, 30) 
+        });
+        
+        storeClientMessage(phone, message, true);
+        updateClientLastMessage(phone, message);
+        
         res.json({ 
             success: true, 
-            clients: clients, 
-            count: clients.length,
-            message: `تم معالجة ${clients.length} عميل بنجاح`
+            message: 'تم إرسال الرسالة بنجاح'
         });
-
     } catch (error) {
-        console.error('❌ Error processing Excel:', error);
-        if (req.file && fs.existsSync(req.file.path)) {
-            fs.unlinkSync(req.file.path);
-        }
-        res.status(500).json({ 
-            error: 'فشل معالجة ملف Excel: ' + error.message 
-        });
+        console.error('Error sending message:', error);
+        res.status(500).json({ error: 'فشل إرسال الرسالة: ' + error.message });
     }
 });
 
-// Get QR status
-app.get('/api/qr-status', (req, res) => {
-    res.json({
-        connected: isConnected,
-        qrAvailable: !!qrCodeUrl && !isConnected,
-        qrCode: qrCodeUrl
-    });
-});
-
-// Get clients list
-app.get('/api/clients', authenticateToken, async (req, res) => {
+// Reconnect endpoint
+app.post('/api/reconnect-whatsapp', (req, res) => {
     try {
-        const userId = req.user.role === 'admin' ? 'admin' : req.user.id;
-        const clientPhones = await db.getAllClients(userId);
-        
-        const clients = clientPhones.map(phone => ({
-            id: phone,
-            name: `عميل ${phone}`,
-            phone: phone,
-            lastMessage: 'لا توجد رسائل',
-            unread: 0,
-            status: 'no-reply'
-        }));
-
-        res.json({ success: true, clients });
+        manualReconnectWhatsApp();
+        res.json({ success: true, message: 'جارٍ إعادة الاتصال...' });
     } catch (error) {
-        res.json({ success: true, clients: [] });
+        res.status(500).json({ error: 'فشل إعادة الاتصال' });
     }
 });
 
-// Default route - serve login page
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'login.html'));
-});
-
-// Dashboard route
-app.get('/dashboard', authenticateToken, (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
-// Socket.io for real-time communication
+// Socket.io
 io.on('connection', (socket) => {
-    console.log('Client connected:', socket.id);
+    console.log('Client connected');
     
-    socket.on('authenticate', (token) => {
-        try {
-            const user = jwt.verify(token, JWT_SECRET);
-            activeUsers.set(socket.id, user);
-            
-            socket.emit('status', { 
-                connected: isConnected, 
-                message: isConnected ? 'واتساب متصل ✅' : 'جارٍ الاتصال...',
-                qrAvailable: !!qrCodeUrl && !isConnected
-            });
+    // Send current status
+    socket.emit('status', { 
+        connected: isConnected, 
+        message: isConnected ? 'واتساب متصل ✅' : 'جارٍ الاتصال...',
+        qrAvailable: !!qrCodeUrl && !isConnected
+    });
 
-            if (qrCodeUrl && !isConnected) {
-                socket.emit('qr', qrCodeUrl);
-            }
+    // Send bot status
+    socket.emit('bot_status', { stopped: isBotStopped });
 
-            console.log(`✅ User ${user.username} authenticated`);
-        } catch (error) {
-            socket.emit('auth_error', 'Invalid token');
-            socket.disconnect();
-        }
+    // Send QR code if available
+    if (qrCodeUrl && !isConnected) {
+        socket.emit('qr', qrCodeUrl);
+        console.log('📱 Sent QR code to new client');
+    }
+
+    // Handle bot toggle
+    socket.on('toggle_bot', (data) => {
+        isBotStopped = data.stop;
+        console.log(`🤖 Bot ${isBotStopped ? 'stopped' : 'started'}`);
+        
+        // Emit bot status to all clients
+        io.emit('bot_status', { stopped: isBotStopped });
+    });
+
+    // Handle client status update
+    socket.on('update_client_status', (data) => {
+        updateClientStatus(data.phone, data.status);
+        socket.emit('client_status_updated', { success: true });
     });
 
     socket.on('send_message', async (data) => {
         try {
-            const user = activeUsers.get(socket.id);
-            if (!user) {
-                socket.emit('message_error', { error: 'غير مصرح' });
-                return;
-            }
-
             const { to, message } = data;
             
             if (!isConnected) {
-                socket.emit('message_error', { error: 'واتساب غير متصل' });
+                socket.emit('message_error', { 
+                    to: to, 
+                    error: 'واتساب غير متصل' 
+                });
                 return;
             }
 
-            const formattedPhone = to.includes('@c.us') ? to : to + '@c.us';
-            await whatsappClient.sendMessage(formattedPhone, message);
+            if (!to || !message) {
+                socket.emit('message_error', { 
+                    to: to, 
+                    error: 'رقم الهاتف والرسالة مطلوبان' 
+                });
+                return;
+            }
+
+            const formattedPhone = formatPhoneNumber(to);
+            const phoneNumber = formattedPhone + '@c.us';
             
-            await db.saveMessage(user.id, to, message, true);
+            await whatsappClient.sendMessage(phoneNumber, message);
             
-            socket.emit('message_sent', { to, message: 'تم الإرسال بنجاح' });
+            // Track individual message
+            trackEmployeeActivity('message_sent', { 
+                clientPhone: formattedPhone,
+                message: message.substring(0, 30) 
+            });
+            
+            storeClientMessage(to, message, true);
+            updateClientLastMessage(to, message);
+            
+            socket.emit('message_sent', { 
+                to: to,
+                message: 'تم الإرسال بنجاح'
+            });
             
         } catch (error) {
-            console.error(`Failed to send message:`, error);
-            socket.emit('message_error', { error: error.message });
+            console.error(`Failed to send message to ${data.to}:`, error);
+            socket.emit('message_error', { 
+                to: data.to, 
+                error: error.message 
+            });
         }
     });
 
     socket.on('reconnect_whatsapp', () => {
-        initializeWhatsApp();
+        manualReconnectWhatsApp();
     });
 
-    socket.on('toggle_bot', (data) => {
-        isBotStopped = data.stop;
-        io.emit('bot_status', { stopped: isBotStopped });
+    socket.on('get_qr_status', () => {
+        socket.emit('qr_status', {
+            connected: isConnected,
+            qrAvailable: !!qrCodeUrl && !isConnected,
+            qrCode: qrCodeUrl
+        });
     });
 
     socket.on('disconnect', () => {
-        activeUsers.delete(socket.id);
-        console.log('Client disconnected:', socket.id);
+        console.log('Client disconnected');
     });
 });
 
-// Initialize
+// Load performance data on startup
 loadPerformanceData();
+
+// Initialize WhatsApp client
 initializeWhatsApp();
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     console.log(`🚀 Server running on http://localhost:${PORT}`);
-    console.log('🏢 Company: رقم كلاود ERP');
-    console.log('📞 Phone: +966555111222');
-    console.log('🌐 Website: https://ragmcloud.sa');
-    console.log('🔐 Authentication: ENABLED');
-    console.log('👤 Admin: IT / @Admin4040');
-    console.log('💾 Database: SQLite (database.sqlite)');
-    console.log('📱 WhatsApp: Session persistence ENABLED');
-    console.log('🤖 AI: DeepSeek Integration ENABLED');
+    console.log('🏢 Company:', ragmcloudCompanyInfo.name);
+    console.log('📞 Phone:', ragmcloudCompanyInfo.phone);
+    console.log('🌐 Website:', ragmcloudCompanyInfo.website);
+    console.log('🔑 DeepSeek Available:', deepseekAvailable);
+    console.log('🤖 BOT STATUS: READY');
+    console.log('⏰ AUTO-REPLY DELAY: 3 SECONDS');
+    console.log('🎯 AI AUTO-STATUS DETECTION: ENABLED');
+    console.log('📊 AUTO-REPORT AFTER 30 MESSAGES: ENABLED');
+    console.log('💰 CORRECT PACKAGES: 1000, 1800, 2700, 3000 ريال');
+    console.log('🔄 CRITICAL FIX: AUTO-REPLY NOW WORKS FOR ALL CLIENTS');
+    console.log('📱 QR CODE: WILL APPEAR ON WEB INTERFACE WHEN NEEDED');
 });
