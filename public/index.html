@@ -327,17 +327,6 @@
         .bot-status-running {
             background: linear-gradient(135deg, #00B98B, #007C5C) !important;
         }
-
-        /* NEW: QR Code Auto-show */
-        .qr-auto-show {
-            animation: qrPulse 2s infinite;
-        }
-
-        @keyframes qrPulse {
-            0% { transform: scale(1); }
-            50% { transform: scale(1.05); }
-            100% { transform: scale(1); }
-        }
     </style>
 </head>
 <body class="text-white">
@@ -350,7 +339,7 @@
         <span id="autoReportMessage"></span>
     </div>
     
-    <!-- QR Overlay - FIXED: Auto-show when QR is available -->
+    <!-- QR Overlay -->
     <div id="qrOverlay" class="qr-overlay hidden">
         <div class="qr-container luxury-card">
             <div class="flex items-center justify-center mb-4">
@@ -358,13 +347,7 @@
                 <h3 class="text-xl font-bold gradient-text">Scan QR Code</h3>
             </div>
             <p class="text-gray-300 mb-4">Scan this QR code with WhatsApp to connect</p>
-            <div id="qrCode" class="mb-4 flex justify-center">
-                <!-- QR code will be inserted here -->
-            </div>
-            <div id="qrInstructions" class="text-yellow-300 text-sm mb-4 p-3 bg-yellow-900 bg-opacity-20 rounded-lg">
-                <i class="fas fa-info-circle mr-2"></i>
-                افتح واتساب → الإعدادات → الأجهزة المرتبطة → ربط جهاز → مسح الكود
-            </div>
+            <div id="qrCode" class="mb-4 flex justify-center"></div>
             <button id="closeQR" class="btn-gold px-6 py-2 rounded-lg font-bold">
                 <i class="fas fa-times mr-2"></i>إغلاق
             </button>
@@ -607,7 +590,6 @@
         let isBulkSending = false;
         let currentStatusFilter = 'all';
         let isBotStopped = false; // NEW: Bot stop state
-        let qrCodeUrl = null; // NEW: Store QR code URL
         
         // DOM Elements
         const qrOverlay = document.getElementById('qrOverlay');
@@ -659,8 +641,7 @@
                 // Connect to Socket.io with error handling
                 socket = io({
                     timeout: 10000,
-                    reconnectionAttempts: 5,
-                    transports: ['websocket', 'polling'] // FIXED: Add fallback transport
+                    reconnectionAttempts: 5
                 });
                 
                 setupSocketEvents();
@@ -670,11 +651,6 @@
                 
                 // Auto-fill promotional message for Ragmcloud ERP
                 bulkMessage.value = "🚀 نظام رقم كلاود ERP السحابي! حلول متكاملة للمحاسبة، المخزون، الموارد البشرية، والمزيد. جلسة استشارية مجانية! 📞 +966555111222 🌐 ragmcloud.sa";
-                
-                // NEW: Check QR status on startup
-                setTimeout(() => {
-                    checkQRStatus();
-                }, 2000);
                 
             } catch (error) {
                 console.error('Failed to initialize app:', error);
@@ -702,14 +678,8 @@
                 whatsappStatus.textContent = data.message;
                 if (data.connected) {
                     whatsappStatus.className = 'status-connected px-3 py-1 rounded-full text-sm font-bold';
-                    // Hide QR when connected
-                    hideQR();
                 } else {
                     whatsappStatus.className = 'status-disconnected px-3 py-1 rounded-full text-sm font-bold';
-                    // Show QR if available
-                    if (data.qrAvailable && qrCodeUrl) {
-                        showQR(qrCodeUrl);
-                    }
                 }
             });
 
@@ -730,18 +700,8 @@
                 loadClients();
             });
             
-            // FIXED: QR Code event - Store the URL and show overlay
             socket.on('qr', (qrDataUrl) => {
-                console.log('📱 QR code received from server');
-                qrCodeUrl = qrDataUrl;
-                
-                if (qrDataUrl && qrDataUrl.trim() !== '') {
-                    showQR(qrDataUrl);
-                    showToast('📱 يرجى مسح QR Code للاتصال بواتساب', 'success');
-                } else {
-                    // QR code cleared (connected)
-                    hideQR();
-                }
+                showQR(qrDataUrl);
             });
 
             socket.on('message', (data) => {
@@ -823,28 +783,6 @@
             
             // Auto-scroll and show/hide scroll button
             chatContainer.addEventListener('scroll', handleChatScroll);
-
-            // NEW: Close QR overlay when clicking outside
-            qrOverlay.addEventListener('click', function(e) {
-                if (e.target === qrOverlay) {
-                    hideQR();
-                }
-            });
-        }
-
-        // NEW: Check QR status from server
-        function checkQRStatus() {
-            fetch('/api/qr-status')
-                .then(response => response.json())
-                .then(data => {
-                    if (data.qrAvailable && data.qrCode) {
-                        qrCodeUrl = data.qrCode;
-                        showQR(data.qrCode);
-                    }
-                })
-                .catch(error => {
-                    console.error('Error checking QR status:', error);
-                });
         }
 
         // NEW: Update bot status UI
@@ -1094,31 +1032,13 @@
             sendBulkBtn.innerHTML = '<i class="fas fa-paper-plane mr-2"></i> 🚀 إرسال عروض ترويجية';
         }
         
-        // FIXED: Show QR function - Auto-show overlay
         function showQR(qrDataUrl) {
-            console.log('🔄 Showing QR code overlay');
-            
-            if (!qrDataUrl || qrDataUrl.trim() === '') {
-                console.log('❌ Empty QR code data');
-                return;
-            }
-            
-            qrCode.innerHTML = `<img src="${qrDataUrl}" alt="QR Code" class="rounded-lg gold-border qr-auto-show" style="width: 300px; height: 300px;">`;
+            qrCode.innerHTML = `<img src="${qrDataUrl}" alt="QR Code" class="rounded-lg gold-border">`;
             qrOverlay.classList.remove('hidden');
-            
-            // Auto-focus on the QR code
-            setTimeout(() => {
-                const qrImage = qrCode.querySelector('img');
-                if (qrImage) {
-                    qrImage.focus();
-                }
-            }, 100);
         }
         
-        // FIXED: Hide QR function
         function hideQR() {
             qrOverlay.classList.add('hidden');
-            qrCodeUrl = null;
         }
         
         function reconnectWhatsApp() {
@@ -1364,7 +1284,7 @@
             retryBulkBtn.disabled = true;
             retryBulkBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> جاري الإرسال...';
             
-            showToast(`🚀 بدأ الإرسال (الطريقة البديلة) إلى ${clients.length} عميل', 'success');
+            showToast(`🚀 بدأ الإرسال (الطريقة البديلة) إلى ${clients.length} عميل`, 'success');
             
             // Simulate sending (replace with actual implementation)
             setTimeout(() => {
